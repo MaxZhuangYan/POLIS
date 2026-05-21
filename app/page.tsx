@@ -12,6 +12,14 @@ type Settlement = {
   contribution: number;
 };
 
+type Operation = {
+  agent: string;
+  mission: string;
+  phase: string;
+  progress: number;
+  expectedSettlement: string;
+};
+
 const roleColors: Record<Agent["role"], string> = {
   Architect: "#45f6ff",
   Broker: "#ffca63",
@@ -20,6 +28,15 @@ const roleColors: Record<Agent["role"], string> = {
   Archivist: "#b7a7ff",
   Maker: "#ff9f6e"
 };
+
+const zoneLabels = [
+  { name: "ARCHIVE HALL", x: "10%", y: "12%" },
+  { name: "CIVIC CORE", x: "42%", y: "34%" },
+  { name: "MARKET RING", x: "16%", y: "66%" },
+  { name: "MAKER YARD", x: "71%", y: "50%" },
+  { name: "OUTER GRID", x: "69%", y: "16%" },
+  { name: "ASSEMBLY", x: "66%", y: "78%" }
+];
 
 const STORAGE_KEY = "polis-demo-state-v1";
 
@@ -42,6 +59,13 @@ export default function Home() {
   const [epoch, setEpoch] = useState(12);
   const [isRunning, setIsRunning] = useState(true);
   const [source, setSource] = useState<"mock" | "lmstudio" | "idle">("idle");
+  const [operation, setOperation] = useState<Operation>({
+    agent: "Mira Chen",
+    mission: "Stabilize Scrip Supply",
+    phase: "Idle / awaiting dispatch",
+    progress: 0,
+    expectedSettlement: "+28 scrip / +6 rep / -18 compute"
+  });
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
@@ -55,7 +79,7 @@ export default function Home() {
         epoch: number;
         selectedId: string;
       };
-      setAgents(state.agents);
+      setAgents(state.agents.map(normalizeAgent));
       setEvents(state.events);
       setWorkLog(state.workLog);
       setSettlement(state.settlement);
@@ -104,13 +128,20 @@ export default function Home() {
   }, [agents, epoch, isRunning]);
 
   const selectedAgent = useMemo(
-    () => agents.find((agent) => agent.id === selectedId) ?? agents[0],
+    () => normalizeAgent(agents.find((agent) => agent.id === selectedId) ?? agents[0]),
     [agents, selectedId]
   );
   const mission = missions.find((item) => item.id === selectedMission) ?? missions[0];
 
   async function runMission(targetMission: Mission = mission) {
     const fallback = fallbackSimulation(selectedAgent, targetMission, epoch);
+    setOperation({
+      agent: selectedAgent.name,
+      mission: targetMission.title,
+      phase: "Instruction queued",
+      progress: 12,
+      expectedSettlement: `+${targetMission.reward} scrip / +${targetMission.reputationImpact} rep / -${targetMission.computeCost} compute`
+    });
     setWorkLog((current) => [`[dispatch] Sending ${selectedAgent.name} into ${targetMission.sector}...`, ...current].slice(0, 12));
 
     let result = { ...fallback, source: "mock" as "mock" | "lmstudio" };
@@ -126,6 +157,13 @@ export default function Home() {
     }
 
     setSource(result.source);
+    setOperation({
+      agent: selectedAgent.name,
+      mission: targetMission.title,
+      phase: "Result archived",
+      progress: 100,
+      expectedSettlement: `+${result.delta.scrip} scrip / +${result.delta.reputation} rep / ${result.delta.compute} compute`
+    });
     setAgents((current) =>
       current.map((agent) =>
         agent.id === selectedAgent.id
@@ -135,7 +173,9 @@ export default function Home() {
               reputation: Math.min(100, agent.reputation + result.delta.reputation),
               compute: Math.max(0, agent.compute + result.delta.compute),
               status: `Completed ${targetMission.title}`,
-              intent: "Awaiting next contract after ledger settlement"
+              intent: "Awaiting next contract after ledger settlement",
+              currentMission: targetMission.title,
+              level: agent.level + (targetMission.difficulty >= 4 ? 1 : 0)
             }
           : agent
       )
@@ -162,6 +202,10 @@ export default function Home() {
       y: Math.floor(16 + Math.random() * 68),
       status: "Newly instantiated in civic core",
       intent: "Observe norms, find first useful contract",
+      level: 1,
+      specialization: `${role} Apprentice`,
+      traits: ["rookie", "curious", "unbonded"],
+      currentMission: "Onboarding Contract",
       scrip: 60,
       reputation: 45,
       compute: 80,
@@ -189,6 +233,60 @@ export default function Home() {
     setSettlement({ scrip: 943, reputation: 631, compute: 512, contribution: 188 });
     setEpoch(12);
     setSource("idle");
+    setOperation({
+      agent: "Mira Chen",
+      mission: "Stabilize Scrip Supply",
+      phase: "Idle / awaiting dispatch",
+      progress: 0,
+      expectedSettlement: "+28 scrip / +6 rep / -18 compute"
+    });
+  }
+
+  function simulateNextTick() {
+    const peerIds = Object.keys(selectedAgent.affinity);
+    const peerId = peerIds[Math.floor(Math.random() * peerIds.length)];
+    const phase = operation.progress < 30 ? "Analysis" : operation.progress < 70 ? "Action" : "Compute receipt";
+    setOperation((current) => ({
+      ...current,
+      agent: selectedAgent.name,
+      mission: mission.title,
+      phase,
+      progress: Math.min(100, current.progress + 18 + mission.difficulty * 3),
+      expectedSettlement: `+${mission.reward} scrip / +${mission.reputationImpact} rep / -${mission.computeCost} compute`
+    }));
+    setSettlement((current) => ({
+      ...current,
+      compute: Math.max(0, current.compute - Math.ceil(mission.computeCost / 6)),
+      contribution: current.contribution + Math.ceil(mission.contribution / 4)
+    }));
+    setAgents((current) =>
+      current.map((agent) =>
+        agent.id === selectedAgent.id
+          ? {
+              ...agent,
+              compute: Math.max(0, agent.compute - 2),
+              reputation: Math.min(100, agent.reputation + 1),
+              affinity: peerId ? { ...agent.affinity, [peerId]: Math.min(10, (agent.affinity[peerId] ?? 4) + 1) } : agent.affinity
+            }
+          : agent
+      )
+    );
+    setEvents((current) => [
+      {
+        id: `tick-${Date.now()}`,
+        time: `E${epoch} ${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}`,
+        kind: "contract" as const,
+        text: `${selectedAgent.name} advanced '${mission.title}' to ${phase}; witness trust and contribution ledger changed.`
+      },
+      ...current
+    ].slice(0, 9));
+    setWorkLog((current) => [
+      `[instruction] Continue ${mission.title} with ${selectedAgent.name}.`,
+      `[analysis] Phase=${phase}; success chance ${mission.successChance}%; recommended role ${mission.recommendedRole}.`,
+      `[action] Relationship witness updated; compute debit ${Math.ceil(mission.computeCost / 6)}.`,
+      `[result] Operation progress advanced toward epoch receipt.`,
+      ...current
+    ].slice(0, 14));
   }
 
   function settleEpoch() {
@@ -232,13 +330,29 @@ export default function Home() {
             <Panel title="Agent Lab" action={<button className="hud-button" onClick={createAgent}>+ Agent</button>}>
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
-                  <div className="pixel-block grid h-14 w-14 place-items-center border border-cyanline/40 bg-cyanline/10 font-mono text-lg font-bold text-cyanline">
+                  <div className="pixel-block grid h-16 w-16 place-items-center border border-cyanline/40 bg-cyanline/10 font-mono text-lg font-bold text-cyanline">
                     {selectedAgent.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}
                   </div>
-                  <div>
-                    <h2 className="text-lg font-bold">{selectedAgent.name}</h2>
-                    <p className="font-mono text-xs uppercase text-slate-400">{selectedAgent.role}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="truncate text-lg font-bold">{selectedAgent.name}</h2>
+                      <span className="rounded border border-amberline/40 bg-amberline/10 px-2 py-1 font-mono text-[10px] text-amberline">Lv {selectedAgent.level}</span>
+                    </div>
+                    <p className="font-mono text-xs uppercase text-slate-400">{selectedAgent.role} / {selectedAgent.specialization}</p>
+                    <p className="mt-1 font-mono text-[10px] uppercase text-mint">{reputationRank(selectedAgent.reputation)}</p>
                   </div>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {selectedAgent.traits.map((trait) => (
+                    <span key={trait} className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 font-mono text-[10px] uppercase text-slate-300">
+                      {trait}
+                    </span>
+                  ))}
+                </div>
+                <div className="rounded border border-cyanline/15 bg-cyanline/[0.04] p-2">
+                  <p className="font-mono text-[10px] uppercase text-slate-500">Current Mission</p>
+                  <p className="mt-1 text-sm text-cyanline">{selectedAgent.currentMission}</p>
+                  <p className="mt-1 text-xs text-slate-400">{selectedAgent.status}</p>
                 </div>
                 <p className="text-sm leading-6 text-slate-300">{selectedAgent.intent}</p>
                 <Bars agent={selectedAgent} />
@@ -258,12 +372,15 @@ export default function Home() {
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold">{agent.name}</span>
+                      <span className="flex min-w-0 items-center gap-2 font-semibold">
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${agent.compute > 60 ? "bg-mint" : agent.compute > 35 ? "bg-amberline" : "bg-blood"}`} />
+                        <span className="truncate">{agent.name}</span>
+                      </span>
                       <span className="font-mono text-[10px] uppercase" style={{ color: roleColors[agent.role] }}>
-                        {agent.role}
+                        Lv{agent.level} {agent.role}
                       </span>
                     </div>
-                    <p className="mt-1 truncate text-xs text-slate-400">{agent.status}</p>
+                    <p className="mt-1 truncate text-xs text-slate-400">{reputationRank(agent.reputation)} / {agent.currentMission}</p>
                   </button>
                 ))}
               </div>
@@ -282,12 +399,13 @@ export default function Home() {
                 </div>
               }
             >
-              <div className="map-grid relative h-[530px] overflow-hidden rounded-md border border-cyanline/15">
+              <div className="map-grid relative h-[580px] overflow-hidden rounded-md border border-cyanline/15">
                 <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
                   {agents.flatMap((agent) =>
-                    Object.keys(agent.affinity).map((targetId) => {
+                    Object.entries(agent.affinity).map(([targetId, value]) => {
                       const target = agents.find((item) => item.id === targetId);
                       if (!target) return null;
+                      const color = value >= 7 ? "rgba(121,255,191,.34)" : value <= 4 ? "rgba(255,73,109,.32)" : "rgba(69,246,255,.22)";
                       return (
                         <line
                           key={`${agent.id}-${targetId}`}
@@ -295,27 +413,52 @@ export default function Home() {
                           y1={agent.y}
                           x2={target.x}
                           y2={target.y}
-                          stroke="rgba(69,246,255,.18)"
-                          strokeWidth="0.25"
+                          stroke={color}
+                          strokeWidth={value >= 7 ? "0.36" : "0.25"}
+                          strokeDasharray={value <= 4 ? "1.4 1.2" : value >= 7 ? "0" : "2 1.4"}
                         />
                       );
                     })
                   )}
+                  <line x1={selectedAgent.x} y1={selectedAgent.y} x2={mission.x} y2={mission.y} stroke="rgba(255,202,99,.78)" strokeWidth="0.5" strokeDasharray="2 1" />
                 </svg>
                 <div className="absolute left-[8%] top-[10%] h-[26%] w-[31%] border border-cyanline/20 bg-cyanline/[0.04]" />
                 <div className="absolute bottom-[11%] left-[15%] h-[21%] w-[28%] border border-amberline/20 bg-amberline/[0.05]" />
                 <div className="absolute right-[9%] top-[18%] h-[55%] w-[25%] border border-mint/20 bg-mint/[0.04]" />
+                <div className="absolute right-[17%] bottom-[11%] h-[18%] w-[25%] border border-blood/20 bg-blood/[0.04]" />
+                {zoneLabels.map((zone) => (
+                  <span key={zone.name} className="absolute rounded border border-white/10 bg-black/45 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-slate-300" style={{ left: zone.x, top: zone.y }}>
+                    {zone.name}
+                  </span>
+                ))}
+                {missions.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setSelectedMission(item.id)}
+                    className={`absolute -translate-x-1/2 -translate-y-1/2 rounded border px-2 py-1 text-left font-mono text-[10px] uppercase transition ${
+                      item.id === selectedMission
+                        ? "border-amberline bg-amberline/20 text-amberline shadow-[0_0_30px_rgba(255,202,99,.35)]"
+                        : "border-amberline/35 bg-black/60 text-amberline/75"
+                    }`}
+                    style={{ left: `${item.x}%`, top: `${item.y}%` }}
+                    title={`${item.title} - ${item.sector}`}
+                  >
+                    <span className="block">TASK</span>
+                    <span className="block max-w-[96px] truncate">{item.title}</span>
+                  </button>
+                ))}
                 {agents.map((agent) => (
                   <button
                     key={agent.id}
                     onClick={() => setSelectedId(agent.id)}
-                    className={`absolute grid h-10 w-10 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-sm border font-mono text-[10px] font-black shadow-glow transition ${
-                      agent.id === selectedId ? "scale-125 border-white bg-white text-void" : "border-white/30 bg-void/80 text-white"
+                    className={`absolute min-w-[92px] -translate-x-1/2 -translate-y-1/2 rounded-md border px-2 py-1 text-left shadow-glow transition ${
+                      agent.id === selectedId ? "scale-110 border-white bg-white text-void" : "border-white/30 bg-void/85 text-white"
                     }`}
                     style={{ left: `${agent.x}%`, top: `${agent.y}%`, boxShadow: `0 0 22px ${roleColors[agent.role]}55` }}
                     title={`${agent.name} - ${agent.role}`}
                   >
-                    {agent.name.slice(0, 2).toUpperCase()}
+                    <span className="block truncate text-xs font-black">{agent.name.split(" ")[0]}</span>
+                    <span className="block truncate font-mono text-[9px] uppercase opacity-75">{agent.role}</span>
                   </button>
                 ))}
                 <div className="absolute bottom-3 left-3 right-3 flex flex-wrap gap-2">
@@ -325,6 +468,8 @@ export default function Home() {
                       {role}
                     </span>
                   ))}
+                  <span className="rounded border border-mint/20 bg-black/40 px-2 py-1 font-mono text-[10px] uppercase text-mint">solid trust</span>
+                  <span className="rounded border border-blood/20 bg-black/40 px-2 py-1 font-mono text-[10px] uppercase text-blood">dashed conflict</span>
                 </div>
               </div>
             </Panel>
@@ -349,11 +494,17 @@ export default function Home() {
                 </div>
               </Panel>
               <Panel title="Epoch Settlement">
-                <div className="grid grid-cols-2 gap-2">
-                  <Metric label="Contribution" value={settlement.contribution} />
-                  <Metric label="Open Agents" value={agents.length} />
-                  <Metric label="Active Contracts" value={missions.length + 2} />
-                  <Metric label="Log Source" value={source === "idle" ? "ready" : source} />
+                <div className="rounded-md border border-amberline/25 bg-amberline/[0.06] p-3">
+                  <div className="flex items-center justify-between border-b border-amberline/15 pb-2 font-mono text-[10px] uppercase text-amberline">
+                    <span>Mission Receipt</span>
+                    <span>Epoch {epoch}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <Metric label="Contribution" value={settlement.contribution} />
+                    <Metric label="Open Agents" value={agents.length} />
+                    <Metric label="Active Contracts" value={missions.length + 2} />
+                    <Metric label="Log Source" value={source === "idle" ? "ready" : source} />
+                  </div>
                 </div>
                 <button className="mt-4 w-full rounded-md border border-amberline/50 bg-amberline/10 px-3 py-2 font-mono text-xs uppercase text-amberline hover:bg-amberline/20" onClick={settleEpoch}>
                   Settle Epoch
@@ -363,6 +514,25 @@ export default function Home() {
           </section>
 
           <aside className="flex flex-col gap-4">
+            <Panel title="Current Operation">
+              <div className="space-y-3">
+                <div className="rounded-md border border-cyanline/20 bg-cyanline/[0.05] p-3">
+                  <div className="flex justify-between gap-3 font-mono text-[10px] uppercase text-slate-500">
+                    <span>{operation.agent}</span>
+                    <span>{operation.phase}</span>
+                  </div>
+                  <p className="mt-2 text-sm font-semibold text-white">{operation.mission}</p>
+                  <div className="mt-3 h-2 overflow-hidden rounded bg-white/10">
+                    <div className="h-full bg-cyanline transition-all" style={{ width: `${operation.progress}%` }} />
+                  </div>
+                  <p className="mt-2 font-mono text-[10px] uppercase text-amberline">{operation.expectedSettlement}</p>
+                </div>
+                <button className="w-full rounded-md border border-mint/50 bg-mint/10 px-4 py-3 font-mono text-xs uppercase text-mint hover:bg-mint/20" onClick={simulateNextTick}>
+                  Simulate Next Tick
+                </button>
+              </div>
+            </Panel>
+
             <Panel title="Mission Board">
               <div className="space-y-3">
                 {missions.map((item) => (
@@ -370,14 +540,24 @@ export default function Home() {
                     key={item.id}
                     onClick={() => setSelectedMission(item.id)}
                     className={`w-full rounded-md border p-3 text-left ${
-                      selectedMission === item.id ? "border-amberline/70 bg-amberline/10" : "border-white/10 bg-white/[0.03]"
+                      selectedMission === item.id
+                        ? "border-amberline/70 bg-amberline/10 shadow-[0_0_26px_rgba(255,202,99,.12)]"
+                        : item.difficulty >= 5
+                          ? "border-blood/35 bg-blood/[0.05]"
+                          : "border-white/10 bg-white/[0.03]"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="font-bold">{item.title}</h3>
                       <span className="font-mono text-xs text-amberline">+{item.reward}</span>
                     </div>
-                    <p className="mt-1 text-xs uppercase text-slate-500">{item.sector} / risk {item.difficulty}</p>
+                    <p className="mt-1 text-xs uppercase text-slate-500">{item.sector} / recommended {item.recommendedRole}</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-[10px] uppercase">
+                      <MissionStat label="Risk" value={`${item.difficulty}/5`} danger={item.difficulty >= 4} />
+                      <MissionStat label="Compute" value={`-${item.computeCost}`} danger={item.computeCost >= 28} />
+                      <MissionStat label="Success" value={`${item.successChance}%`} danger={item.successChance < 60} />
+                      <MissionStat label="Rep Impact" value={`+${item.reputationImpact}`} />
+                    </div>
                     <p className="mt-2 text-sm leading-5 text-slate-300">{item.brief}</p>
                   </button>
                 ))}
@@ -402,11 +582,12 @@ export default function Home() {
             </Panel>
 
             <Panel title="Work Log Terminal">
-              <div className="terminal h-[260px] overflow-auto rounded-md p-3 font-mono text-xs leading-5 text-mint">
+              <div className="terminal h-[300px] overflow-auto rounded-md p-3 font-mono text-xs leading-5 text-mint">
                 {workLog.map((line, index) => (
-                  <p key={`${line}-${index}`} className="border-b border-mint/5 py-1">
-                    {line}
-                  </p>
+                  <div key={`${line}-${index}`} className="grid grid-cols-[56px_1fr] gap-2 border-b border-mint/5 py-1">
+                    <span className="text-slate-500">T+{String(index).padStart(2, "0")}</span>
+                    <p className={line.includes("result") || line.includes("Completed") ? "text-amberline" : "text-mint"}>{line}</p>
+                  </div>
                 ))}
               </div>
             </Panel>
@@ -415,6 +596,23 @@ export default function Home() {
       </div>
     </main>
   );
+}
+
+function reputationRank(reputation: number) {
+  if (reputation >= 80) return "Specialist";
+  if (reputation >= 68) return "Trusted I";
+  if (reputation >= 55) return "Operator";
+  return "Rookie";
+}
+
+function normalizeAgent(agent: Agent): Agent {
+  return {
+    ...agent,
+    level: agent.level ?? Math.max(1, Math.round(agent.reputation / 12)),
+    specialization: agent.specialization ?? `${agent.role} Operations`,
+    traits: agent.traits ?? ["legacy", "stable", agent.role.toLowerCase()],
+    currentMission: agent.currentMission ?? agent.status
+  };
 }
 
 function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
@@ -426,6 +624,15 @@ function Panel({ title, action, children }: { title: string; action?: React.Reac
       </div>
       {children}
     </section>
+  );
+}
+
+function MissionStat({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
+  return (
+    <div className={`rounded border px-2 py-1 ${danger ? "border-blood/35 bg-blood/10 text-blood" : "border-white/10 bg-white/[0.04] text-slate-300"}`}>
+      <span className="block text-slate-500">{label}</span>
+      <span className="block font-black">{value}</span>
+    </div>
   );
 }
 
