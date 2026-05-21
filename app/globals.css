@@ -69,6 +69,10 @@ select {
   clip-path: polygon(10% 0, 90% 0, 100% 14%, 100% 86%, 90% 100%, 10% 100%, 0 86%, 0 14%);
 }
 
+.pixel-icon {
+  image-rendering: pixelated;
+}
+
 .terminal {
   background: linear-gradient(180deg, rgba(3, 8, 17, 0.96), rgba(2, 4, 10, 0.98));
   border: 1px solid rgba(121, 255, 191, 0.24);

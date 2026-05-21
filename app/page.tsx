@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { agents as seedAgents, initialEvents, missions } from "@/app/data/polis";
 import type { Agent, Mission, WorldEvent } from "@/app/data/polis";
@@ -27,6 +28,24 @@ const roleColors: Record<Agent["role"], string> = {
   Mediator: "#ff6f91",
   Archivist: "#b7a7ff",
   Maker: "#ff9f6e"
+};
+
+const roleIcons: Record<Agent["role"], string> = {
+  Architect: "/assets/polis-icons/architect.png",
+  Broker: "/assets/polis-icons/broker.png",
+  Scout: "/assets/polis-icons/scout.png",
+  Mediator: "/assets/polis-icons/mediator.png",
+  Archivist: "/assets/polis-icons/archivist.png",
+  Maker: "/assets/polis-icons/maker.png"
+};
+
+const zoneIcons: Record<string, string> = {
+  "MARKET RING": "/assets/polis-icons/market.png",
+  "CIVIC CORE": "/assets/polis-icons/civic.png",
+  "ARCHIVE HALL": "/assets/polis-icons/archive.png",
+  "MAKER YARD": "/assets/polis-icons/maker.png",
+  "OUTER GRID": "/assets/polis-icons/outer.png",
+  ASSEMBLY: "/assets/polis-icons/assembly.png"
 };
 
 const zoneLabels = [
@@ -330,8 +349,8 @@ export default function Home() {
             <Panel title="Agent Lab" action={<button className="hud-button" onClick={createAgent}>+ Agent</button>}>
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
-                  <div className="pixel-block grid h-16 w-16 place-items-center border border-cyanline/40 bg-cyanline/10 font-mono text-lg font-bold text-cyanline">
-                    {selectedAgent.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}
+                  <div className="pixel-block grid h-16 w-16 place-items-center border border-cyanline/40 bg-cyanline/10 p-1">
+                    <Image className="pixel-icon h-full w-full object-contain drop-shadow-[0_6px_12px_rgba(0,0,0,.35)]" src={roleIcons[selectedAgent.role]} alt={`${selectedAgent.role} icon`} width={128} height={128} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
@@ -374,6 +393,7 @@ export default function Home() {
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex min-w-0 items-center gap-2 font-semibold">
                         <span className={`h-2 w-2 shrink-0 rounded-full ${agent.compute > 60 ? "bg-mint" : agent.compute > 35 ? "bg-amberline" : "bg-blood"}`} />
+                        <Image className="pixel-icon h-6 w-6 shrink-0 object-contain" src={roleIcons[agent.role]} alt="" aria-hidden="true" width={32} height={32} />
                         <span className="truncate">{agent.name}</span>
                       </span>
                       <span className="font-mono text-[10px] uppercase" style={{ color: roleColors[agent.role] }}>
@@ -427,7 +447,8 @@ export default function Home() {
                 <div className="absolute right-[9%] top-[18%] h-[55%] w-[25%] border border-mint/20 bg-mint/[0.04]" />
                 <div className="absolute right-[17%] bottom-[11%] h-[18%] w-[25%] border border-blood/20 bg-blood/[0.04]" />
                 {zoneLabels.map((zone) => (
-                  <span key={zone.name} className="absolute rounded border border-white/10 bg-black/45 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-slate-300" style={{ left: zone.x, top: zone.y }}>
+                  <span key={zone.name} className="absolute flex items-center gap-1 rounded border border-white/10 bg-black/45 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-slate-300" style={{ left: zone.x, top: zone.y }}>
+                    <Image className="pixel-icon h-5 w-5 object-contain" src={zoneIcons[zone.name]} alt="" aria-hidden="true" width={28} height={28} />
                     {zone.name}
                   </span>
                 ))}
@@ -443,8 +464,11 @@ export default function Home() {
                     style={{ left: `${item.x}%`, top: `${item.y}%` }}
                     title={`${item.title} - ${item.sector}`}
                   >
-                    <span className="block">TASK</span>
-                    <span className="block max-w-[96px] truncate">{item.title}</span>
+                    <span className="flex items-center gap-1">
+                      <Image className="pixel-icon h-5 w-5 object-contain" src="/assets/polis-icons/mission.png" alt="" aria-hidden="true" width={28} height={28} />
+                      <span className="block">TASK</span>
+                    </span>
+                    <span className="block max-w-[96px] truncate pl-6">{item.title}</span>
                   </button>
                 ))}
                 {agents.map((agent) => (
@@ -457,14 +481,19 @@ export default function Home() {
                     style={{ left: `${agent.x}%`, top: `${agent.y}%`, boxShadow: `0 0 22px ${roleColors[agent.role]}55` }}
                     title={`${agent.name} - ${agent.role}`}
                   >
-                    <span className="block truncate text-xs font-black">{agent.name.split(" ")[0]}</span>
-                    <span className="block truncate font-mono text-[9px] uppercase opacity-75">{agent.role}</span>
+                    <span className="flex items-center gap-1">
+                      <Image className="pixel-icon h-7 w-7 shrink-0 object-contain" src={roleIcons[agent.role]} alt="" aria-hidden="true" width={36} height={36} />
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-black">{agent.name.split(" ")[0]}</span>
+                        <span className="block truncate font-mono text-[9px] uppercase opacity-75">{agent.role}</span>
+                      </span>
+                    </span>
                   </button>
                 ))}
                 <div className="absolute bottom-3 left-3 right-3 flex flex-wrap gap-2">
                   {Object.entries(roleColors).map(([role, color]) => (
                     <span key={role} className="rounded border border-white/10 bg-black/40 px-2 py-1 font-mono text-[10px] uppercase text-slate-300">
-                      <span className="mr-1 inline-block h-2 w-2" style={{ background: color }} />
+                      <Image className="pixel-icon mr-1 inline-block h-4 w-4 align-middle" src={roleIcons[role as Agent["role"]]} alt="" aria-hidden="true" width={24} height={24} />
                       {role}
                     </span>
                   ))}
