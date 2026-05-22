@@ -420,6 +420,15 @@ export default function Home() {
               }
             >
               <div className="map-grid relative h-[580px] overflow-hidden rounded-md border border-cyanline/15">
+                <Image
+                  className="pixel-icon absolute inset-0 h-full w-full object-cover opacity-80 saturate-[.92]"
+                  src="/assets/polis-pixel-town-map.png"
+                  alt="Pixel art Polis town map"
+                  width={1600}
+                  height={900}
+                  priority
+                />
+                <div className="absolute inset-0 bg-void/20" />
                 <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
                   {agents.flatMap((agent) =>
                     Object.entries(agent.affinity).map(([targetId, value]) => {
