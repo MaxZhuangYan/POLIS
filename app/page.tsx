@@ -21,6 +21,8 @@ type Operation = {
   expectedSettlement: string;
 };
 
+type Language = "en" | "zh";
+
 type AgentMotion = {
   x: number;
   y: number;
@@ -63,6 +65,163 @@ const actionLabels: Record<AgentMotion["action"], string> = {
   trade: "trade"
 };
 
+const copy = {
+  en: {
+    subtitle: "AI contract civilization prototype",
+    language: "中文",
+    epoch: "Epoch",
+    scrip: "Scrip",
+    reputation: "Reputation",
+    compute: "Compute",
+    agentLab: "Agent Lab",
+    addAgent: "+ Agent",
+    currentMission: "Current Mission",
+    roster: "Roster",
+    societySpace: "Society Space",
+    pause: "Pause",
+    run: "Run",
+    reset: "Reset",
+    task: "TASK",
+    solidTrust: "solid trust",
+    dashedConflict: "dashed conflict",
+    relationshipGraph: "Relationship Graph",
+    epochSettlement: "Epoch Settlement",
+    missionReceipt: "Mission Receipt",
+    contribution: "Contribution",
+    openAgents: "Open Agents",
+    activeContracts: "Active Contracts",
+    logSource: "Log Source",
+    ready: "ready",
+    settleEpoch: "Settle Epoch",
+    currentOperation: "Current Operation",
+    simulateNextTick: "Simulate Next Tick",
+    missionBoard: "Mission Board",
+    recommended: "recommended",
+    risk: "Risk",
+    success: "Success",
+    repImpact: "Rep Impact",
+    dispatch: "Dispatch Selected Agent",
+    worldFeed: "World Feed",
+    workLog: "Work Log Terminal",
+    trust: "trust",
+    roles: {
+      Architect: "Architect",
+      Broker: "Broker",
+      Scout: "Scout",
+      Mediator: "Mediator",
+      Archivist: "Archivist",
+      Maker: "Maker"
+    },
+    ranks: {
+      Specialist: "Specialist",
+      "Trusted I": "Trusted I",
+      Operator: "Operator",
+      Rookie: "Rookie"
+    },
+    actions: actionLabels
+  },
+  zh: {
+    subtitle: "AI 契约文明原型",
+    language: "EN",
+    epoch: "纪元",
+    scrip: "工票",
+    reputation: "声望",
+    compute: "算力",
+    agentLab: "智能体工坊",
+    addAgent: "+ 智能体",
+    currentMission: "当前任务",
+    roster: "居民名单",
+    societySpace: "社会地图",
+    pause: "暂停",
+    run: "运行",
+    reset: "重置",
+    task: "任务",
+    solidTrust: "信任关系",
+    dashedConflict: "冲突关系",
+    relationshipGraph: "关系网络",
+    epochSettlement: "纪元结算",
+    missionReceipt: "任务回执",
+    contribution: "贡献",
+    openAgents: "居民数",
+    activeContracts: "活跃契约",
+    logSource: "日志来源",
+    ready: "就绪",
+    settleEpoch: "结算纪元",
+    currentOperation: "当前行动",
+    simulateNextTick: "模拟下一刻",
+    missionBoard: "任务板",
+    recommended: "推荐",
+    risk: "风险",
+    success: "成功率",
+    repImpact: "声望影响",
+    dispatch: "派遣选中智能体",
+    worldFeed: "世界事件",
+    workLog: "工作日志终端",
+    trust: "信任",
+    roles: {
+      Architect: "规划师",
+      Broker: "经纪人",
+      Scout: "探索者",
+      Mediator: "调解员",
+      Archivist: "档案员",
+      Maker: "工匠"
+    },
+    ranks: {
+      Specialist: "专家",
+      "Trusted I": "可信 I",
+      Operator: "执行者",
+      Rookie: "新人"
+    },
+    actions: {
+      idle: "...",
+      walk: "移动",
+      talk: "交谈",
+      work: "工作",
+      sign: "签约",
+      trade: "交易"
+    }
+  }
+} as const;
+
+const missionCopy = {
+  en: {
+    supply: {
+      title: "Stabilize Scrip Supply",
+      brief: "Audit idle work logs, find payout leaks, and propose a calibrated issuance rule."
+    },
+    bridge: {
+      title: "Build Trust Bridge",
+      brief: "Pair two low-affinity agents on a small shared contract and record the outcome."
+    },
+    beacon: {
+      title: "Repair North Beacon",
+      brief: "Coordinate scouts and makers to restore compute relay coverage before night cycle."
+    },
+    charter: {
+      title: "Draft Epoch Charter",
+      brief: "Synthesize disputes into one collective rule amendment for the next settlement vote."
+    }
+  },
+  zh: {
+    supply: {
+      title: "稳定工票供给",
+      brief: "审计闲置工作日志，找出结算漏洞，并提出校准后的发行规则。"
+    },
+    bridge: {
+      title: "搭建信任桥",
+      brief: "让两个低亲和智能体共同完成小契约，并记录协作结果。"
+    },
+    beacon: {
+      title: "修复北部信标",
+      brief: "协调探索者和工匠，在夜间周期前恢复算力中继覆盖。"
+    },
+    charter: {
+      title: "起草纪元章程",
+      brief: "把争议综合成下一次居民投票的集体规则修正案。"
+    }
+  }
+} as const;
+
 const zoneIcons: Record<string, string> = {
   "MARKET RING": "/assets/polis-icons/market.png",
   "CIVIC CORE": "/assets/polis-icons/civic.png",
@@ -82,6 +241,7 @@ const zoneLabels = [
 ];
 
 const STORAGE_KEY = "polis-demo-state-v1";
+const LANGUAGE_KEY = "polis-language-v1";
 
 function initialMotion(agentList: Agent[]): Record<string, AgentMotion> {
   return Object.fromEntries(
@@ -98,6 +258,7 @@ function initialMotion(agentList: Agent[]): Record<string, AgentMotion> {
 
 export default function Home() {
   const [agents, setAgents] = useState<Agent[]>(seedAgents);
+  const [language, setLanguage] = useState<Language>("en");
   const [agentMotion, setAgentMotion] = useState<Record<string, AgentMotion>>(() => initialMotion(seedAgents));
   const [selectedId, setSelectedId] = useState("mira");
   const [selectedMission, setSelectedMission] = useState(missions[0].id);
@@ -123,8 +284,13 @@ export default function Home() {
     progress: 0,
     expectedSettlement: "+28 scrip / +6 rep / -18 compute"
   });
+  const t = copy[language];
 
   useEffect(() => {
+    const savedLanguage = window.localStorage.getItem(LANGUAGE_KEY);
+    if (savedLanguage === "en" || savedLanguage === "zh") {
+      setLanguage(savedLanguage);
+    }
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (!saved) return;
     try {
@@ -147,6 +313,10 @@ export default function Home() {
       window.localStorage.removeItem(STORAGE_KEY);
     }
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(LANGUAGE_KEY, language);
+  }, [language]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -205,6 +375,7 @@ export default function Home() {
     [agents, selectedId]
   );
   const mission = missions.find((item) => item.id === selectedMission) ?? missions[0];
+  const selectedMissionText = missionText(mission, language);
 
   async function runMission(targetMission: Mission = mission) {
     const fallback = fallbackSimulation(selectedAgent, targetMission, epoch);
@@ -420,20 +591,23 @@ export default function Home() {
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1800px] flex-col gap-4 p-3 sm:p-4 lg:p-5">
         <header className="hud-panel flex flex-col gap-4 rounded-lg px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.24em] text-cyanline/75">AI contract civilization prototype</p>
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-cyanline/75">{t.subtitle}</p>
             <h1 className="mt-1 font-display text-3xl font-black uppercase text-white sm:text-5xl">POLIS</h1>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[620px]">
-            <Resource label="Epoch" value={epoch.toString()} tone="cyan" />
-            <Resource label="Scrip" value={settlement.scrip.toString()} tone="amber" />
-            <Resource label="Reputation" value={settlement.reputation.toString()} tone="mint" />
-            <Resource label="Compute" value={settlement.compute.toString()} tone="rose" />
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 lg:min-w-[720px]">
+            <Resource label={t.epoch} value={epoch.toString()} tone="cyan" />
+            <Resource label={t.scrip} value={settlement.scrip.toString()} tone="amber" />
+            <Resource label={t.reputation} value={settlement.reputation.toString()} tone="mint" />
+            <Resource label={t.compute} value={settlement.compute.toString()} tone="rose" />
+            <button className="rounded-md border border-cyanline/30 bg-cyanline/10 px-3 py-2 font-mono text-xs uppercase text-cyanline hover:bg-cyanline/20" onClick={() => setLanguage((value) => (value === "en" ? "zh" : "en"))}>
+              {t.language}
+            </button>
           </div>
         </header>
 
         <section className="grid flex-1 grid-cols-1 gap-4 xl:grid-cols-[320px_minmax(560px,1fr)_390px]">
           <aside className="flex flex-col gap-4">
-            <Panel title="Agent Lab" action={<button className="hud-button" onClick={createAgent}>+ Agent</button>}>
+            <Panel title={t.agentLab} action={<button className="hud-button" onClick={createAgent}>{t.addAgent}</button>}>
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
                   <div className="pixel-block grid h-16 w-16 place-items-center border border-cyanline/40 bg-cyanline/10 p-1">
@@ -444,8 +618,8 @@ export default function Home() {
                       <h2 className="truncate text-lg font-bold">{selectedAgent.name}</h2>
                       <span className="rounded border border-amberline/40 bg-amberline/10 px-2 py-1 font-mono text-[10px] text-amberline">Lv {selectedAgent.level}</span>
                     </div>
-                    <p className="font-mono text-xs uppercase text-slate-400">{selectedAgent.role} / {selectedAgent.specialization}</p>
-                    <p className="mt-1 font-mono text-[10px] uppercase text-mint">{reputationRank(selectedAgent.reputation)}</p>
+                    <p className="font-mono text-xs uppercase text-slate-400">{t.roles[selectedAgent.role]} / {selectedAgent.specialization}</p>
+                    <p className="mt-1 font-mono text-[10px] uppercase text-mint">{rankLabel(selectedAgent.reputation, language)}</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1">
@@ -456,7 +630,7 @@ export default function Home() {
                   ))}
                 </div>
                 <div className="rounded border border-cyanline/15 bg-cyanline/[0.04] p-2">
-                  <p className="font-mono text-[10px] uppercase text-slate-500">Current Mission</p>
+                  <p className="font-mono text-[10px] uppercase text-slate-500">{t.currentMission}</p>
                   <p className="mt-1 text-sm text-cyanline">{selectedAgent.currentMission}</p>
                   <p className="mt-1 text-xs text-slate-400">{selectedAgent.status}</p>
                 </div>
@@ -465,7 +639,7 @@ export default function Home() {
               </div>
             </Panel>
 
-            <Panel title="Roster">
+            <Panel title={t.roster}>
               <div className="max-h-[430px] space-y-2 overflow-auto pr-1">
                 {agents.map((agent) => (
                   <button
@@ -484,10 +658,10 @@ export default function Home() {
                         <span className="truncate">{agent.name}</span>
                       </span>
                       <span className="font-mono text-[10px] uppercase" style={{ color: roleColors[agent.role] }}>
-                        Lv{agent.level} {agent.role}
+                        Lv{agent.level} {t.roles[agent.role]}
                       </span>
                     </div>
-                    <p className="mt-1 truncate text-xs text-slate-400">{reputationRank(agent.reputation)} / {agent.currentMission}</p>
+                    <p className="mt-1 truncate text-xs text-slate-400">{rankLabel(agent.reputation, language)} / {agent.currentMission}</p>
                   </button>
                 ))}
               </div>
@@ -496,13 +670,13 @@ export default function Home() {
 
           <section className="flex flex-col gap-4">
             <Panel
-              title="Society Space"
+              title={t.societySpace}
               action={
                 <div className="flex gap-2">
                   <button className="hud-button" onClick={() => setIsRunning((value) => !value)}>
-                    {isRunning ? "Pause" : "Run"}
+                    {isRunning ? t.pause : t.run}
                   </button>
-                  <button className="hud-button" onClick={resetDemo}>Reset</button>
+                  <button className="hud-button" onClick={resetDemo}>{t.reset}</button>
                 </div>
               }
             >
@@ -562,9 +736,9 @@ export default function Home() {
                   >
                     <span className="flex items-center gap-1">
                       <Image className="pixel-icon h-5 w-5 object-contain" src="/assets/polis-icons/mission.png" alt="" aria-hidden="true" width={28} height={28} />
-                      <span className="block">TASK</span>
+                      <span className="block">{t.task}</span>
                     </span>
-                    <span className="block max-w-[96px] truncate pl-6">{item.title}</span>
+                    <span className="block max-w-[96px] truncate pl-6">{missionText(item, language).title}</span>
                   </button>
                 ))}
                 {agents.map((agent) => {
@@ -586,7 +760,7 @@ export default function Home() {
                         width={80}
                         height={80}
                       />
-                      <span className={`agent-bubble ${motion.action === "idle" ? "opacity-0" : "opacity-100"}`}>{actionLabels[motion.action]}</span>
+                      <span className={`agent-bubble ${motion.action === "idle" ? "opacity-0" : "opacity-100"}`}>{t.actions[motion.action]}</span>
                     </button>
                   );
                 })}
@@ -604,7 +778,7 @@ export default function Home() {
                       <Image className="pixel-icon h-7 w-7 shrink-0 object-contain" src={roleIcons[agent.role]} alt="" aria-hidden="true" width={36} height={36} />
                       <span className="min-w-0">
                         <span className="block truncate text-xs font-black">{agent.name.split(" ")[0]}</span>
-                        <span className="block truncate font-mono text-[9px] uppercase opacity-75">{agent.role}</span>
+                        <span className="block truncate font-mono text-[9px] uppercase opacity-75">{t.roles[agent.role]}</span>
                       </span>
                     </span>
                   </button>
@@ -613,17 +787,17 @@ export default function Home() {
                   {Object.entries(roleColors).map(([role, color]) => (
                     <span key={role} className="rounded border border-white/10 bg-black/40 px-2 py-1 font-mono text-[10px] uppercase text-slate-300">
                       <Image className="pixel-icon mr-1 inline-block h-4 w-4 align-middle" src={roleIcons[role as Agent["role"]]} alt="" aria-hidden="true" width={24} height={24} />
-                      {role}
+                      {t.roles[role as Agent["role"]]}
                     </span>
                   ))}
-                  <span className="rounded border border-mint/20 bg-black/40 px-2 py-1 font-mono text-[10px] uppercase text-mint">solid trust</span>
-                  <span className="rounded border border-blood/20 bg-black/40 px-2 py-1 font-mono text-[10px] uppercase text-blood">dashed conflict</span>
+                  <span className="rounded border border-mint/20 bg-black/40 px-2 py-1 font-mono text-[10px] uppercase text-mint">{t.solidTrust}</span>
+                  <span className="rounded border border-blood/20 bg-black/40 px-2 py-1 font-mono text-[10px] uppercase text-blood">{t.dashedConflict}</span>
                 </div>
               </div>
             </Panel>
 
             <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
-              <Panel title="Relationship Graph">
+              <Panel title={t.relationshipGraph}>
                 <div className="space-y-3">
                   {Object.entries(selectedAgent.affinity).map(([id, value]) => {
                     const peer = agents.find((item) => item.id === id);
@@ -631,7 +805,7 @@ export default function Home() {
                       <div key={id}>
                         <div className="mb-1 flex justify-between text-xs text-slate-300">
                           <span>{peer?.name ?? id}</span>
-                          <span>{value}/10 trust</span>
+                          <span>{value}/10 {t.trust}</span>
                         </div>
                         <div className="h-2 overflow-hidden rounded bg-white/10">
                           <div className="h-full bg-cyanline" style={{ width: `${value * 10}%` }} />
@@ -641,47 +815,47 @@ export default function Home() {
                   })}
                 </div>
               </Panel>
-              <Panel title="Epoch Settlement">
+              <Panel title={t.epochSettlement}>
                 <div className="rounded-md border border-amberline/25 bg-amberline/[0.06] p-3">
                   <div className="flex items-center justify-between border-b border-amberline/15 pb-2 font-mono text-[10px] uppercase text-amberline">
-                    <span>Mission Receipt</span>
-                    <span>Epoch {epoch}</span>
+                    <span>{t.missionReceipt}</span>
+                    <span>{t.epoch} {epoch}</span>
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2">
-                    <Metric label="Contribution" value={settlement.contribution} />
-                    <Metric label="Open Agents" value={agents.length} />
-                    <Metric label="Active Contracts" value={missions.length + 2} />
-                    <Metric label="Log Source" value={source === "idle" ? "ready" : source} />
+                    <Metric label={t.contribution} value={settlement.contribution} />
+                    <Metric label={t.openAgents} value={agents.length} />
+                    <Metric label={t.activeContracts} value={missions.length + 2} />
+                    <Metric label={t.logSource} value={source === "idle" ? t.ready : source} />
                   </div>
                 </div>
                 <button className="mt-4 w-full rounded-md border border-amberline/50 bg-amberline/10 px-3 py-2 font-mono text-xs uppercase text-amberline hover:bg-amberline/20" onClick={settleEpoch}>
-                  Settle Epoch
+                  {t.settleEpoch}
                 </button>
               </Panel>
             </div>
           </section>
 
           <aside className="flex flex-col gap-4">
-            <Panel title="Current Operation">
+            <Panel title={t.currentOperation}>
               <div className="space-y-3">
                 <div className="rounded-md border border-cyanline/20 bg-cyanline/[0.05] p-3">
                   <div className="flex justify-between gap-3 font-mono text-[10px] uppercase text-slate-500">
                     <span>{operation.agent}</span>
                     <span>{operation.phase}</span>
                   </div>
-                  <p className="mt-2 text-sm font-semibold text-white">{operation.mission}</p>
+                  <p className="mt-2 text-sm font-semibold text-white">{selectedMissionText.title}</p>
                   <div className="mt-3 h-2 overflow-hidden rounded bg-white/10">
                     <div className="h-full bg-cyanline transition-all" style={{ width: `${operation.progress}%` }} />
                   </div>
                   <p className="mt-2 font-mono text-[10px] uppercase text-amberline">{operation.expectedSettlement}</p>
                 </div>
                 <button className="w-full rounded-md border border-mint/50 bg-mint/10 px-4 py-3 font-mono text-xs uppercase text-mint hover:bg-mint/20" onClick={simulateNextTick}>
-                  Simulate Next Tick
+                  {t.simulateNextTick}
                 </button>
               </div>
             </Panel>
 
-            <Panel title="Mission Board">
+            <Panel title={t.missionBoard}>
               <div className="space-y-3">
                 {missions.map((item) => (
                   <button
@@ -696,26 +870,26 @@ export default function Home() {
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <h3 className="font-bold">{item.title}</h3>
+                      <h3 className="font-bold">{missionText(item, language).title}</h3>
                       <span className="font-mono text-xs text-amberline">+{item.reward}</span>
                     </div>
-                    <p className="mt-1 text-xs uppercase text-slate-500">{item.sector} / recommended {item.recommendedRole}</p>
+                    <p className="mt-1 text-xs uppercase text-slate-500">{item.sector} / {t.recommended} {t.roles[item.recommendedRole]}</p>
                     <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-[10px] uppercase">
-                      <MissionStat label="Risk" value={`${item.difficulty}/5`} danger={item.difficulty >= 4} />
-                      <MissionStat label="Compute" value={`-${item.computeCost}`} danger={item.computeCost >= 28} />
-                      <MissionStat label="Success" value={`${item.successChance}%`} danger={item.successChance < 60} />
-                      <MissionStat label="Rep Impact" value={`+${item.reputationImpact}`} />
+                      <MissionStat label={t.risk} value={`${item.difficulty}/5`} danger={item.difficulty >= 4} />
+                      <MissionStat label={t.compute} value={`-${item.computeCost}`} danger={item.computeCost >= 28} />
+                      <MissionStat label={t.success} value={`${item.successChance}%`} danger={item.successChance < 60} />
+                      <MissionStat label={t.repImpact} value={`+${item.reputationImpact}`} />
                     </div>
-                    <p className="mt-2 text-sm leading-5 text-slate-300">{item.brief}</p>
+                    <p className="mt-2 text-sm leading-5 text-slate-300">{missionText(item, language).brief}</p>
                   </button>
                 ))}
                 <button className="w-full rounded-md border border-cyanline/60 bg-cyanline/10 px-4 py-3 font-mono text-xs uppercase text-cyanline hover:bg-cyanline/20" onClick={() => runMission()}>
-                  Dispatch Selected Agent
+                  {t.dispatch}
                 </button>
               </div>
             </Panel>
 
-            <Panel title="World Feed">
+            <Panel title={t.worldFeed}>
               <div className="max-h-[260px] space-y-2 overflow-auto pr-1">
                 {events.map((event) => (
                   <div key={event.id} className="rounded border border-white/10 bg-white/[0.03] p-2">
@@ -729,7 +903,7 @@ export default function Home() {
               </div>
             </Panel>
 
-            <Panel title="Work Log Terminal">
+            <Panel title={t.workLog}>
               <div className="terminal h-[300px] overflow-auto rounded-md p-3 font-mono text-xs leading-5 text-mint">
                 {workLog.map((line, index) => (
                   <div key={`${line}-${index}`} className="grid grid-cols-[56px_1fr] gap-2 border-b border-mint/5 py-1">
@@ -751,6 +925,14 @@ function reputationRank(reputation: number) {
   if (reputation >= 68) return "Trusted I";
   if (reputation >= 55) return "Operator";
   return "Rookie";
+}
+
+function rankLabel(reputation: number, language: Language) {
+  return copy[language].ranks[reputationRank(reputation)];
+}
+
+function missionText(mission: Mission, language: Language) {
+  return missionCopy[language][mission.id as keyof typeof missionCopy.en] ?? { title: mission.title, brief: mission.brief };
 }
 
 function clamp(value: number, min: number, max: number) {
