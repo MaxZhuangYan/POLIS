@@ -29,6 +29,17 @@ type AgentMotion = {
   action: "idle" | "walk" | "talk" | "work" | "sign" | "trade";
 };
 
+type SocietyState = {
+  food: number;
+  materials: number;
+  knowledge: number;
+  culture: number;
+  tradeVolume: number;
+  friendship: number;
+  satisfaction: number;
+  decision: string;
+};
+
 const roleColors: Record<Agent["role"], string> = {
   Architect: "#45f6ff",
   Broker: "#ffca63",
@@ -104,6 +115,24 @@ const copy = {
     worldFeed: "World Feed",
     workLog: "Work Log Terminal",
     trust: "trust",
+    societySandbox: "Society Sandbox",
+    dataObservatory: "Data Observatory",
+    production: "Production",
+    trade: "Trade",
+    social: "Social",
+    decision: "Decision",
+    produceCycle: "Run Production Cycle",
+    marketTrade: "Open Market Trade",
+    socialDecision: "Convene Social Decision",
+    food: "Food",
+    materials: "Materials",
+    knowledge: "Knowledge",
+    culture: "Culture",
+    tradeVolume: "Trade Volume",
+    friendship: "Friendship",
+    satisfaction: "Satisfaction",
+    ranking: "Contribution Ranking",
+    currentRule: "Current Rule",
     roles: {
       Architect: "Architect",
       Broker: "Broker",
@@ -158,6 +187,24 @@ const copy = {
     worldFeed: "世界事件",
     workLog: "工作日志终端",
     trust: "信任",
+    societySandbox: "社会沙盒",
+    dataObservatory: "数据观察台",
+    production: "生产",
+    trade: "交易",
+    social: "社交",
+    decision: "决策",
+    produceCycle: "运行生产周期",
+    marketTrade: "开放市场交易",
+    socialDecision: "召集社会决策",
+    food: "食物",
+    materials: "材料",
+    knowledge: "知识",
+    culture: "文化",
+    tradeVolume: "交易量",
+    friendship: "友谊指数",
+    satisfaction: "满意度",
+    ranking: "贡献排名",
+    currentRule: "当前规则",
     roles: {
       Architect: "规划师",
       Broker: "经纪人",
@@ -277,6 +324,16 @@ export default function Home() {
   const [epoch, setEpoch] = useState(12);
   const [isRunning, setIsRunning] = useState(true);
   const [source, setSource] = useState<"mock" | "lmstudio" | "idle">("idle");
+  const [society, setSociety] = useState<SocietyState>({
+    food: 78,
+    materials: 64,
+    knowledge: 52,
+    culture: 41,
+    tradeVolume: 126,
+    friendship: 68,
+    satisfaction: 72,
+    decision: "Proof before payout"
+  });
   const [operation, setOperation] = useState<Operation>({
     agent: "Mira Chen",
     mission: "Stabilize Scrip Supply",
@@ -350,6 +407,14 @@ export default function Home() {
         ...current,
         compute: Math.max(0, current.compute - 1),
         contribution: current.contribution + 1
+      }));
+      setSociety((current) => ({
+        ...current,
+        food: clamp(current.food + Math.round(Math.random() * 4 - 1), 20, 140),
+        materials: clamp(current.materials + Math.round(Math.random() * 3), 20, 140),
+        tradeVolume: clamp(current.tradeVolume + Math.round(Math.random() * 8 - 2), 60, 260),
+        friendship: clamp(current.friendship + Math.round(Math.random() * 4 - 1), 20, 100),
+        satisfaction: clamp(current.satisfaction + Math.round(Math.random() * 5 - 2), 20, 100)
       }));
       setAgentMotion((current) => {
         const next = { ...current };
@@ -498,6 +563,16 @@ export default function Home() {
     setSettlement({ scrip: 943, reputation: 631, compute: 512, contribution: 188 });
     setEpoch(12);
     setSource("idle");
+    setSociety({
+      food: 78,
+      materials: 64,
+      knowledge: 52,
+      culture: 41,
+      tradeVolume: 126,
+      friendship: 68,
+      satisfaction: 72,
+      decision: "Proof before payout"
+    });
     setOperation({
       agent: "Mira Chen",
       mission: "Stabilize Scrip Supply",
@@ -562,6 +637,67 @@ export default function Home() {
       `[analysis] Phase=${phase}; success chance ${mission.successChance}%; recommended role ${mission.recommendedRole}.`,
       `[action] Relationship witness updated; compute debit ${Math.ceil(mission.computeCost / 6)}.`,
       `[result] Operation progress advanced toward epoch receipt.`,
+      ...current
+    ].slice(0, 14));
+  }
+
+  function runProductionCycle() {
+    const makers = agents.filter((agent) => agent.role === "Maker" || agent.role === "Scout").length;
+    setSociety((current) => ({
+      ...current,
+      food: clamp(current.food + 8 + makers, 20, 160),
+      materials: clamp(current.materials + 10 + makers * 2, 20, 160),
+      knowledge: clamp(current.knowledge + 4, 20, 160),
+      satisfaction: clamp(current.satisfaction + 2, 20, 100)
+    }));
+    setAgentMotion((current) => focusRoleMotion(current, agents, ["Maker", "Scout"], "work"));
+    appendSocietyEvent("production", "Production cycle completed: scouts gathered inputs and makers converted them into shared stock.");
+  }
+
+  function runMarketTrade() {
+    const brokers = agents.filter((agent) => agent.role === "Broker").length;
+    setSociety((current) => ({
+      ...current,
+      food: clamp(current.food - 4, 20, 160),
+      materials: clamp(current.materials - 3, 20, 160),
+      tradeVolume: clamp(current.tradeVolume + 22 + brokers * 8, 60, 320),
+      friendship: clamp(current.friendship + 3 + brokers, 20, 100),
+      satisfaction: clamp(current.satisfaction + 4, 20, 100)
+    }));
+    setSettlement((current) => ({ ...current, scrip: current.scrip + 18 + brokers * 4 }));
+    setAgentMotion((current) => focusRoleMotion(current, agents, ["Broker"], "trade"));
+    appendSocietyEvent("trade", "Market opened: brokers matched surplus goods with unmet needs and raised trade volume.");
+  }
+
+  function runSocialDecision() {
+    const decisions = ["Shared food reserve", "Mentor rookies first", "Lower compute ration", "Public work proof", "Festival after settlement"];
+    const decision = decisions[Math.floor(Math.random() * decisions.length)];
+    setSociety((current) => ({
+      ...current,
+      culture: clamp(current.culture + 9, 20, 160),
+      knowledge: clamp(current.knowledge + 6, 20, 160),
+      friendship: clamp(current.friendship + 6, 20, 100),
+      satisfaction: clamp(current.satisfaction + 5, 20, 100),
+      decision
+    }));
+    setAgentMotion((current) => focusRoleMotion(current, agents, ["Mediator", "Archivist", "Architect"], "talk"));
+    appendSocietyEvent("decision", `Assembly decision adopted: ${decision}. Agents update plans around the new norm.`);
+  }
+
+  function appendSocietyEvent(kind: string, text: string) {
+    const eventKind: WorldEvent["kind"] = kind === "decision" ? "rule" : kind === "trade" ? "contract" : "culture";
+    setEvents((current) => [
+      {
+        id: `${kind}-${Date.now()}`,
+        time: `E${epoch} ${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}`,
+        kind: eventKind,
+        text
+      },
+      ...current
+    ].slice(0, 9));
+    setWorkLog((current) => [
+      `[${kind}] ${text}`,
+      `[observer] Food ${society.food}, materials ${society.materials}, trade ${society.tradeVolume}, friendship ${society.friendship}.`,
       ...current
     ].slice(0, 14));
   }
@@ -796,7 +932,31 @@ export default function Home() {
               </div>
             </Panel>
 
-            <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+            <div className="grid gap-4 lg:grid-cols-3">
+              <Panel title={t.dataObservatory}>
+                <div className="grid grid-cols-3 gap-2">
+                  <Metric label={t.tradeVolume} value={society.tradeVolume} />
+                  <Metric label={t.friendship} value={`${society.friendship}%`} />
+                  <Metric label={t.satisfaction} value={`${society.satisfaction}%`} />
+                </div>
+                <div className="mt-3 rounded border border-white/10 bg-white/[0.03] p-2">
+                  <p className="font-mono text-[10px] uppercase text-slate-500">{t.currentRule}</p>
+                  <p className="mt-1 text-sm text-amberline">{society.decision}</p>
+                </div>
+                <div className="mt-3 space-y-2">
+                  <p className="font-mono text-[10px] uppercase text-slate-500">{t.ranking}</p>
+                  {agents
+                    .slice()
+                    .sort((a, b) => b.reputation + b.scrip / 10 - (a.reputation + a.scrip / 10))
+                    .slice(0, 3)
+                    .map((agent, index) => (
+                      <div key={agent.id} className="flex items-center justify-between rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-xs">
+                        <span>{index + 1}. {agent.name}</span>
+                        <span className="font-mono text-mint">{agent.reputation + Math.round(agent.scrip / 10)}</span>
+                      </div>
+                    ))}
+                </div>
+              </Panel>
               <Panel title={t.relationshipGraph}>
                 <div className="space-y-3">
                   {Object.entries(selectedAgent.affinity).map(([id, value]) => {
@@ -851,6 +1011,26 @@ export default function Home() {
                 </div>
                 <button className="w-full rounded-md border border-mint/50 bg-mint/10 px-4 py-3 font-mono text-xs uppercase text-mint hover:bg-mint/20" onClick={simulateNextTick}>
                   {t.simulateNextTick}
+                </button>
+              </div>
+            </Panel>
+
+            <Panel title={t.societySandbox}>
+              <div className="grid grid-cols-2 gap-2">
+                <Metric label={t.food} value={society.food} />
+                <Metric label={t.materials} value={society.materials} />
+                <Metric label={t.knowledge} value={society.knowledge} />
+                <Metric label={t.culture} value={society.culture} />
+              </div>
+              <div className="mt-3 grid gap-2">
+                <button className="rounded-md border border-mint/40 bg-mint/10 px-3 py-2 font-mono text-[10px] uppercase text-mint hover:bg-mint/20" onClick={runProductionCycle}>
+                  {t.produceCycle}
+                </button>
+                <button className="rounded-md border border-amberline/40 bg-amberline/10 px-3 py-2 font-mono text-[10px] uppercase text-amberline hover:bg-amberline/20" onClick={runMarketTrade}>
+                  {t.marketTrade}
+                </button>
+                <button className="rounded-md border border-cyanline/40 bg-cyanline/10 px-3 py-2 font-mono text-[10px] uppercase text-cyanline hover:bg-cyanline/20" onClick={runSocialDecision}>
+                  {t.socialDecision}
                 </button>
               </div>
             </Panel>
@@ -933,6 +1113,25 @@ function rankLabel(reputation: number, language: Language) {
 
 function missionText(mission: Mission, language: Language) {
   return missionCopy[language][mission.id as keyof typeof missionCopy.en] ?? { title: mission.title, brief: mission.brief };
+}
+
+function focusRoleMotion(
+  current: Record<string, AgentMotion>,
+  agents: Agent[],
+  roles: Agent["role"][],
+  action: AgentMotion["action"]
+) {
+  const next = { ...current };
+  agents.forEach((agent) => {
+    if (!roles.includes(agent.role)) return;
+    const motion = next[agent.id] ?? { x: agent.x, y: agent.y, action: "idle" as const };
+    next[agent.id] = {
+      x: clamp(motion.x + (agent.x - motion.x) * 0.5 + (Math.random() - 0.5) * 3, 10, 86),
+      y: clamp(motion.y + (agent.y - motion.y) * 0.5 + (Math.random() - 0.5) * 3, 16, 78),
+      action
+    };
+  });
+  return next;
 }
 
 function clamp(value: number, min: number, max: number) {
