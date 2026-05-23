@@ -73,6 +73,42 @@ select {
   image-rendering: pixelated;
 }
 
+.agent-sprite {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  filter: saturate(0.95);
+  animation: sprite-bob 1.1s steps(2, end) infinite;
+}
+
+.agent-bubble {
+  position: absolute;
+  left: 50%;
+  top: -0.55rem;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: rgba(7, 11, 24, 0.86);
+  color: #ffca63;
+  padding: 0.12rem 0.28rem;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+@keyframes sprite-bob {
+  0%,
+  100% {
+    transform: translate(-50%, -100%) translateY(0);
+  }
+  50% {
+    transform: translate(-50%, -100%) translateY(-3px);
+  }
+}
+
 .terminal {
   background: linear-gradient(180deg, rgba(3, 8, 17, 0.96), rgba(2, 4, 10, 0.98));
   border: 1px solid rgba(121, 255, 191, 0.24);

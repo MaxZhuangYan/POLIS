@@ -21,6 +21,12 @@ type Operation = {
   expectedSettlement: string;
 };
 
+type AgentMotion = {
+  x: number;
+  y: number;
+  action: "idle" | "walk" | "talk" | "work" | "sign" | "trade";
+};
+
 const roleColors: Record<Agent["role"], string> = {
   Architect: "#45f6ff",
   Broker: "#ffca63",
@@ -37,6 +43,24 @@ const roleIcons: Record<Agent["role"], string> = {
   Mediator: "/assets/polis-icons/mediator.png",
   Archivist: "/assets/polis-icons/archivist.png",
   Maker: "/assets/polis-icons/maker.png"
+};
+
+const roleSprites: Record<Agent["role"], string> = {
+  Architect: "/assets/polis-sprites/architect.png",
+  Broker: "/assets/polis-sprites/broker.png",
+  Scout: "/assets/polis-sprites/scout.png",
+  Mediator: "/assets/polis-sprites/mediator.png",
+  Archivist: "/assets/polis-sprites/archivist.png",
+  Maker: "/assets/polis-sprites/maker.png"
+};
+
+const actionLabels: Record<AgentMotion["action"], string> = {
+  idle: "...",
+  walk: "move",
+  talk: "talk",
+  work: "work",
+  sign: "sign",
+  trade: "trade"
 };
 
 const zoneIcons: Record<string, string> = {
@@ -59,8 +83,22 @@ const zoneLabels = [
 
 const STORAGE_KEY = "polis-demo-state-v1";
 
+function initialMotion(agentList: Agent[]): Record<string, AgentMotion> {
+  return Object.fromEntries(
+    agentList.map((agent, index) => [
+      agent.id,
+      {
+        x: agent.x + ((index % 3) - 1) * 1.5,
+        y: agent.y + (index % 2 === 0 ? -1.2 : 1.2),
+        action: index % 4 === 0 ? "talk" : "idle"
+      }
+    ])
+  );
+}
+
 export default function Home() {
   const [agents, setAgents] = useState<Agent[]>(seedAgents);
+  const [agentMotion, setAgentMotion] = useState<Record<string, AgentMotion>>(() => initialMotion(seedAgents));
   const [selectedId, setSelectedId] = useState("mira");
   const [selectedMission, setSelectedMission] = useState(missions[0].id);
   const [events, setEvents] = useState<WorldEvent[]>(initialEvents);
@@ -99,6 +137,7 @@ export default function Home() {
         selectedId: string;
       };
       setAgents(state.agents.map(normalizeAgent));
+      setAgentMotion(initialMotion(state.agents.map(normalizeAgent)));
       setEvents(state.events);
       setWorkLog(state.workLog);
       setSettlement(state.settlement);
@@ -142,6 +181,21 @@ export default function Home() {
         compute: Math.max(0, current.compute - 1),
         contribution: current.contribution + 1
       }));
+      setAgentMotion((current) => {
+        const next = { ...current };
+        agents.forEach((agent) => {
+          const motion = next[agent.id] ?? { x: agent.x, y: agent.y, action: "idle" as const };
+          const driftX = (Math.random() - 0.5) * 5;
+          const driftY = (Math.random() - 0.5) * 4;
+          const actions: AgentMotion["action"][] = ["walk", "talk", "work", "idle", "trade"];
+          next[agent.id] = {
+            x: clamp(motion.x + driftX, 10, 86),
+            y: clamp(motion.y + driftY, 16, 78),
+            action: actions[Math.floor(Math.random() * actions.length)]
+          };
+        });
+        return next;
+      });
     }, 4600);
     return () => window.clearInterval(timer);
   }, [agents, epoch, isRunning]);
@@ -161,6 +215,14 @@ export default function Home() {
       progress: 12,
       expectedSettlement: `+${targetMission.reward} scrip / +${targetMission.reputationImpact} rep / -${targetMission.computeCost} compute`
     });
+    setAgentMotion((current) => ({
+      ...current,
+      [selectedAgent.id]: {
+        x: (selectedAgent.x * 0.38 + targetMission.x * 0.62),
+        y: (selectedAgent.y * 0.38 + targetMission.y * 0.62),
+        action: "sign"
+      }
+    }));
     setWorkLog((current) => [`[dispatch] Sending ${selectedAgent.name} into ${targetMission.sector}...`, ...current].slice(0, 12));
 
     let result = { ...fallback, source: "mock" as "mock" | "lmstudio" };
@@ -183,6 +245,14 @@ export default function Home() {
       progress: 100,
       expectedSettlement: `+${result.delta.scrip} scrip / +${result.delta.reputation} rep / ${result.delta.compute} compute`
     });
+    setAgentMotion((current) => ({
+      ...current,
+      [selectedAgent.id]: {
+        x: targetMission.x + 2,
+        y: targetMission.y + 2,
+        action: "work"
+      }
+    }));
     setAgents((current) =>
       current.map((agent) =>
         agent.id === selectedAgent.id
@@ -231,6 +301,10 @@ export default function Home() {
       affinity: { [selectedAgent.id]: 5 }
     };
     setAgents((current) => [...current, newAgent]);
+    setAgentMotion((current) => ({
+      ...current,
+      [id]: { x: newAgent.x, y: newAgent.y, action: "walk" }
+    }));
     setSelectedId(id);
     setEvents((current) => [
       {
@@ -246,6 +320,7 @@ export default function Home() {
   function resetDemo() {
     window.localStorage.removeItem(STORAGE_KEY);
     setAgents(seedAgents);
+    setAgentMotion(initialMotion(seedAgents));
     setSelectedId("mira");
     setEvents(initialEvents);
     setWorkLog(["[reset] Polis restored to initial civic state.", "[world] Epoch 12 restarted."]);
@@ -273,6 +348,18 @@ export default function Home() {
       progress: Math.min(100, current.progress + 18 + mission.difficulty * 3),
       expectedSettlement: `+${mission.reward} scrip / +${mission.reputationImpact} rep / -${mission.computeCost} compute`
     }));
+    setAgentMotion((current) => {
+      const motion = current[selectedAgent.id] ?? { x: selectedAgent.x, y: selectedAgent.y, action: "idle" as const };
+      const action: AgentMotion["action"] = phase === "Analysis" ? "talk" : phase === "Action" ? "walk" : "work";
+      return {
+        ...current,
+        [selectedAgent.id]: {
+          x: clamp(motion.x + (mission.x - motion.x) * 0.45, 10, 86),
+          y: clamp(motion.y + (mission.y - motion.y) * 0.45, 16, 78),
+          action
+        }
+      };
+    });
     setSettlement((current) => ({
       ...current,
       compute: Math.max(0, current.compute - Math.ceil(mission.computeCost / 6)),
@@ -480,6 +567,29 @@ export default function Home() {
                     <span className="block max-w-[96px] truncate pl-6">{item.title}</span>
                   </button>
                 ))}
+                {agents.map((agent) => {
+                  const motion = agentMotion[agent.id] ?? { x: agent.x, y: agent.y, action: "idle" as const };
+                  return (
+                    <button
+                      key={`${agent.id}-sprite`}
+                      onClick={() => setSelectedId(agent.id)}
+                      className={`agent-sprite absolute -translate-x-1/2 -translate-y-full transition-[left,top,transform] duration-700 ease-out ${
+                        agent.id === selectedId ? "z-30 scale-125" : "z-20"
+                      }`}
+                      style={{ left: `${motion.x}%`, top: `${motion.y}%` }}
+                      title={`${agent.name} moving through Polis`}
+                    >
+                      <Image
+                        className="pixel-icon h-12 w-12 object-contain drop-shadow-[0_6px_5px_rgba(0,0,0,.55)]"
+                        src={roleSprites[agent.role]}
+                        alt={`${agent.name} sprite`}
+                        width={80}
+                        height={80}
+                      />
+                      <span className={`agent-bubble ${motion.action === "idle" ? "opacity-0" : "opacity-100"}`}>{actionLabels[motion.action]}</span>
+                    </button>
+                  );
+                })}
                 {agents.map((agent) => (
                   <button
                     key={agent.id}
@@ -641,6 +751,10 @@ function reputationRank(reputation: number) {
   if (reputation >= 68) return "Trusted I";
   if (reputation >= 55) return "Operator";
   return "Rookie";
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function normalizeAgent(agent: Agent): Agent {
