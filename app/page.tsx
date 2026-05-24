@@ -17,7 +17,8 @@ import { fallbackSimulation, fallbackDialogue, fallbackChatReply } from "@/app/l
 type Language = "en" | "zh";
 type GamePhase = "create" | "play";
 type GameMode = "game" | "data";
-type RightTab = "conversations" | "economy" | "policy" | "events";
+type RightTab = "conversations" | "economy" | "events" | "network" | "leaderboard";
+type NetworkView = "mine" | "society";
 type PlanFocus = NonNullable<Agent["planFocus"]>;
 
 type AgentMotion = {
@@ -51,6 +52,22 @@ type DecisionPrompt = {
   situation: string;
   options: Array<{ key: "A" | "B" | "C"; label: string; effect: string }>;
   triggeredBy?: string;
+};
+
+type DecisionRecord = {
+  id: string;
+  time: string;
+  situation: string;
+  choiceLabel: string;
+  statDelta: {
+    scrip: number;
+    reputation: number;
+    compute: number;
+    energy: number;
+    satiety: number;
+  };
+  affinityChanges: Array<{ agentName: string; delta: number }>;
+  autoResolved: boolean;
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -180,6 +197,8 @@ const copy = {
     reset: "Reset",
     gameMode: "Game",
     dataMode: "Data",
+    playerMode: "Player",
+    observerMode: "Observer",
     settlement: "Settle Epoch",
     agents: "Agents",
     roster: "Roster",
@@ -191,6 +210,20 @@ const copy = {
     worldEvents: "World Events",
     trust: "trust",
     relationships: "Relationships",
+    decisionLog: "Decision Log",
+    myNetwork: "My Network",
+    societyView: "Society",
+    civilizationPanel: "Civilization",
+    scripCirculation: "In Circulation",
+    avgEnergy: "Avg Energy",
+    weakBonds: "Weak bonds",
+    autoResolved: "AUTO",
+    noDecisions: "No decisions yet.",
+    socialHub: "Social Hub",
+    loner: "Loner",
+    avgAffinity: "Avg Affinity",
+    activeBonds: "Active Bonds",
+    lastInteraction: "Last Interaction",
     addAgent: "+ Agent",
     giniCoeff: "Gini Coeff",
     wealthDistribution: "Wealth Distribution",
@@ -257,6 +290,8 @@ const copy = {
     reset: "重置",
     gameMode: "游戏",
     dataMode: "数据",
+    playerMode: "玩家",
+    observerMode: "观察者",
     settlement: "结算纪元",
     agents: "智能体",
     roster: "居民",
@@ -268,6 +303,20 @@ const copy = {
     worldEvents: "世界事件",
     trust: "信任",
     relationships: "关系",
+    decisionLog: "决策记录",
+    myNetwork: "我的关系",
+    societyView: "社会全图",
+    civilizationPanel: "文明面板",
+    scripCirculation: "流通工票",
+    avgEnergy: "平均能量",
+    weakBonds: "弱关系",
+    autoResolved: "自动",
+    noDecisions: "暂无决策记录。",
+    socialHub: "社交中心",
+    loner: "孤立者",
+    avgAffinity: "平均关系",
+    activeBonds: "活跃关系",
+    lastInteraction: "最近互动",
     addAgent: "+ 智能体",
     giniCoeff: "基尼系数",
     wealthDistribution: "财富分布",
@@ -304,6 +353,8 @@ const copy = {
   }
 } as const;
 
+type CopyText = (typeof copy)[Language];
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
@@ -328,6 +379,26 @@ function nearestZone(x: number, y: number): string {
 
 function agentWealth(a: Agent): number {
   return a.scrip + a.reputation * 2 + Math.round(a.compute * 0.5);
+}
+
+function agentStats(a: Agent): DecisionRecord["statDelta"] {
+  return {
+    scrip: a.scrip,
+    reputation: a.reputation,
+    compute: a.compute,
+    energy: a.energy ?? 0,
+    satiety: a.satiety ?? 0
+  };
+}
+
+function subtractStats(after: DecisionRecord["statDelta"], before: DecisionRecord["statDelta"]): DecisionRecord["statDelta"] {
+  return {
+    scrip: after.scrip - before.scrip,
+    reputation: after.reputation - before.reputation,
+    compute: after.compute - before.compute,
+    energy: after.energy - before.energy,
+    satiety: after.satiety - before.satiety
+  };
 }
 
 function nowTime(epoch: number): string {
@@ -440,6 +511,10 @@ export default function Home() {
   const [decisionExpiresAt, setDecisionExpiresAt] = useState<number | null>(null);
   const [decisionSecondsLeft, setDecisionSecondsLeft] = useState(0);
   const [decisionInput,  setDecisionInput]  = useState("");
+  const [decisionHistory, setDecisionHistory] = useState<DecisionRecord[]>([]);
+  const [decisionLogOpen, setDecisionLogOpen] = useState(false);
+  const [networkView, setNetworkView] = useState<NetworkView>("mine");
+  const [selectedNetworkAgentId, setSelectedNetworkAgentId] = useState<string | null>(null);
   const [dailyPlanInput, setDailyPlanInput] = useState("");
   const [temporaryPromptInput, setTemporaryPromptInput] = useState("");
 
@@ -497,6 +572,7 @@ export default function Home() {
         settlement: Settlement; selectedId: string;
         conversations: Conversation[]; marketPrices: Record<string, number>;
         missionProgress?: Record<string, number>; dailyPlanInput?: string; temporaryPromptInput?: string;
+        decisionHistory?: DecisionRecord[];
       };
       const normalized = s.agents.map(normalizeAgent);
       const motion = initialMotion(normalized);
@@ -513,6 +589,7 @@ export default function Home() {
         ...Object.fromEntries(missions.map(m => [m.id, m.progress ?? 0])),
         ...s.missionProgress
       });
+      if (Array.isArray(s.decisionHistory)) setDecisionHistory(s.decisionHistory.slice(0, 20));
       if (typeof s.dailyPlanInput === "string") setDailyPlanInput(s.dailyPlanInput);
       if (typeof s.temporaryPromptInput === "string") setTemporaryPromptInput(s.temporaryPromptInput);
     } catch {
@@ -573,9 +650,16 @@ export default function Home() {
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      agents, events, epoch, settlement, selectedId, conversations, marketPrices, missionProgress, dailyPlanInput, temporaryPromptInput
+      agents, events, epoch, settlement, selectedId, conversations, marketPrices, missionProgress, dailyPlanInput, temporaryPromptInput, decisionHistory
     }));
-  }, [agents, events, epoch, settlement, selectedId, conversations, marketPrices, missionProgress, dailyPlanInput, temporaryPromptInput]);
+  }, [agents, events, epoch, settlement, selectedId, conversations, marketPrices, missionProgress, dailyPlanInput, temporaryPromptInput, decisionHistory]);
+
+  useEffect(() => {
+    const playerTabs: RightTab[] = ["conversations", "economy", "events"];
+    const observerTabs: RightTab[] = ["network", "economy", "events", "leaderboard"];
+    if (gameMode === "game" && !playerTabs.includes(rightTab)) setRightTab("conversations");
+    if (gameMode === "data" && !observerTabs.includes(rightTab)) setRightTab("network");
+  }, [gameMode, rightTab]);
 
   // ── Speech bubble helpers ─────────────────────────────────────────────────
   const addSpeechBubble = useCallback((agentId: string, text: string) => {
@@ -779,6 +863,30 @@ export default function Home() {
     return +clamp(sumDiff / (2 * n * n * mean), 0, 1).toFixed(2);
   }, [agents]);
 
+  const bottomEarner = leaderboard[leaderboard.length - 1];
+  const totalScrip = agents.reduce((sum, agent) => sum + agent.scrip, 0);
+  const avgEnergy = agents.length
+    ? Math.round(agents.reduce((sum, agent) => sum + (agent.energy ?? 0), 0) / agents.length)
+    : 0;
+
+  const displayedConversations = useMemo(() => {
+    if (gameMode !== "game" || !playerAgent) return conversations;
+    return [...conversations].sort((a, b) => {
+      const aRelevant = a.agentIds.includes(playerAgent.id) || a.agentIds.includes("player") || a.agentIds[0] === "system";
+      const bRelevant = b.agentIds.includes(playerAgent.id) || b.agentIds.includes("player") || b.agentIds[0] === "system";
+      return Number(bRelevant) - Number(aRelevant);
+    });
+  }, [conversations, gameMode, playerAgent]);
+
+  const displayedEvents = useMemo(() => {
+    if (gameMode !== "game" || !playerAgent) return events;
+    return [...events].sort((a, b) => {
+      const aRelevant = a.text.includes(playerAgent.name) || a.text.includes("Player decision") || a.text.includes("Decision ignored");
+      const bRelevant = b.text.includes(playerAgent.name) || b.text.includes("Player decision") || b.text.includes("Decision ignored");
+      return Number(bRelevant) - Number(aRelevant);
+    });
+  }, [events, gameMode, playerAgent]);
+
   function activeLmEndpoint(): string {
     return lmMode === "local"
       ? "http://127.0.0.1:1234/v1/chat/completions"
@@ -791,6 +899,14 @@ export default function Home() {
     const player = currentAgents.find(a => a.id === playerId) ?? currentAgents.find(a => a.isPlayer);
     if (!player || currentAgents.length < 1) return null;
 
+    const nonPlayerAgents = currentAgents.filter(a => a.id !== player.id);
+    const pickAgent = () => nonPlayerAgents[Math.floor(Math.random() * nonPlayerAgents.length)] ?? player;
+    const debtor = pickAgent();
+    const trustedAlly = Object.entries(player.affinity)
+      .map(([id, affinity]) => ({ agent: currentAgents.find(a => a.id === id), affinity }))
+      .filter((item): item is { agent: Agent; affinity: number } => Boolean(item.agent))
+      .sort((a, b) => b.affinity - a.affinity)[0]?.agent ?? pickAgent();
+    const socialTarget = pickAgent();
     const debtAmount = Math.floor(Math.random() * 20) + 10;
     const zh = languageRef.current === "zh";
     const bank: DecisionPrompt[] = [
@@ -821,9 +937,9 @@ export default function Home() {
       {
         id: `decision-debt-${Date.now()}`,
         situation: zh
-          ? `另一位智能体拖欠了你的工票。欠款：${debtAmount}。`
-          : `Another agent owes you scrip. Debt: ${debtAmount}.`,
-        triggeredBy: `debt|${debtAmount}`,
+          ? `${debtor.name} 拖欠了你的工票。欠款：${debtAmount}。`
+          : `${debtor.name} owes you scrip. Debt: ${debtAmount}.`,
+        triggeredBy: `debt|${debtor.id}|${debtAmount}`,
         options: [
           { key: "A", label: zh ? "强制追收" : "Enforce", effect: zh ? `+${debtAmount} 工票，-8 声望` : `+${debtAmount} scrip, -8 rep` },
           { key: "B", label: zh ? "免除" : "Forgive", effect: zh ? "+15 声望，0 工票" : "+15 rep, 0 scrip" },
@@ -857,9 +973,9 @@ export default function Home() {
       {
         id: `decision-betrayal-${Date.now()}`,
         situation: zh
-          ? "你最信任的盟友在背后分享了你的计划。"
-          : "Your most-trusted ally leaked your plans to others.",
-        triggeredBy: "betrayal",
+          ? `你信任的盟友 ${trustedAlly.name} 在背后分享了你的计划。`
+          : `Your trusted ally ${trustedAlly.name} leaked your plans to others.`,
+        triggeredBy: `betrayal|${trustedAlly.id}`,
         options: [
           { key: "A", label: zh ? "当面对质" : "Confront", effect: zh ? "50/50：+10 声望 或 -15 声望" : "50/50: +10 rep or -15 rep" },
           { key: "B", label: zh ? "放下" : "Let go", effect: zh ? "-8 声望，+10 能量" : "-8 rep, +10 energy" },
@@ -883,7 +999,7 @@ export default function Home() {
         situation: zh
           ? "你收到多个社交邀请，但时间和精力有限，只能选一个。"
           : "You received multiple social invitations but can only attend one.",
-        triggeredBy: "social-inv",
+        triggeredBy: `social-inv|${socialTarget.id}`,
         options: [
           { key: "A", label: zh ? "高曝光活动" : "High-profile event", effect: zh ? "+10 声望，-10 能量，-5 工票" : "+10 rep, -10 energy, -5 scrip" },
           { key: "B", label: zh ? "小型聚会" : "Small gathering", effect: zh ? "+4 声望，-3 能量" : "+4 rep, -3 energy" },
@@ -899,12 +1015,22 @@ export default function Home() {
     const option = prompt.options.find(o => o.key === key);
     if (!option) return;
 
-    const [kind, value] = (prompt.triggeredBy ?? "").split("|");
+    const [kind, subjectId, value] = (prompt.triggeredBy ?? "").split("|");
     const playerId = playerAgentIdRef.current;
+    const currentAgents = agentsRef.current;
+    const playerBefore = currentAgents.find(a => a.id === playerId) ?? currentAgents.find(a => a.isPlayer);
+    if (!playerBefore) return;
+
+    const beforeStats = agentStats(playerBefore);
+    let afterStats = beforeStats;
+    const affinityChanges: DecisionRecord["affinityChanges"] = [];
+    const hrcGambleWon = kind === "hrc" && key === "C" ? Math.random() >= 0.5 : false;
+    const marketGambleWon = kind === "market-opp" && key === "A" ? Math.random() < 0.6 : false;
+    const betrayalWon = kind === "betrayal" && key === "A" ? Math.random() >= 0.5 : false;
     let resultText = option.effect;
 
-    setAgents(prev => {
-      const next = prev.map(agent => {
+    let affinityDelta: { agentId: string; delta: number } | null = null;
+    const nextWithStats = currentAgents.map(agent => {
         if (agent.id !== playerId && !agent.isPlayer) return agent;
 
         const energy = agent.energy ?? 80;
@@ -927,7 +1053,7 @@ export default function Home() {
             });
           }
           if (key === "C") {
-            if (Math.random() >= 0.5) {
+            if (hrcGambleWon) {
               resultText = languageRef.current === "zh" ? "赌约成功：+35 工票，-10 能量" : "Gamble succeeded: +35 scrip, -10 energy";
               return finish({ scrip: clamp(agent.scrip + 35, 0, 500), energy: clamp(energy - 10, 0, 100) });
             }
@@ -951,8 +1077,15 @@ export default function Home() {
 
         if (kind === "debt") {
           const debtAmount = Number(value) || 0;
-          if (key === "A") return finish({ scrip: clamp(agent.scrip + debtAmount, 0, 500), reputation: clamp(agent.reputation - 8, 0, 100) });
-          if (key === "B") return finish({ reputation: clamp(agent.reputation + 15, 0, 100) });
+          if (key === "A") {
+            affinityDelta = { agentId: subjectId, delta: -2 };
+            return finish({ scrip: clamp(agent.scrip + debtAmount, 0, 500), reputation: clamp(agent.reputation - 8, 0, 100) });
+          }
+          if (key === "B") {
+            affinityDelta = { agentId: subjectId, delta: 3 };
+            return finish({ reputation: clamp(agent.reputation + 15, 0, 100) });
+          }
+          affinityDelta = { agentId: subjectId, delta: 1 };
           return finish({ scrip: clamp(agent.scrip + Math.floor(debtAmount / 2), 0, 500), reputation: clamp(agent.reputation + 5, 0, 100) });
         }
 
@@ -971,7 +1104,7 @@ export default function Home() {
               resultText = languageRef.current === "zh" ? "工票不足，无法大额投入" : "Insufficient scrip for big investment";
               return finish({});
             }
-            if (Math.random() < 0.6) {
+            if (marketGambleWon) {
               resultText = languageRef.current === "zh" ? "套利成功：+40 工票" : "Arbitrage succeeded: +40 scrip";
               return finish({ scrip: clamp(agent.scrip + 40, 0, 500) });
             }
@@ -984,14 +1117,19 @@ export default function Home() {
 
         if (kind === "betrayal") {
           if (key === "A") {
-            if (Math.random() >= 0.5) {
+            if (betrayalWon) {
+              affinityDelta = { agentId: subjectId, delta: 2 };
               resultText = languageRef.current === "zh" ? "对质成功：+10 声望" : "Confrontation vindicated you: +10 rep";
               return finish({ reputation: clamp(agent.reputation + 10, 0, 100) });
             }
+            affinityDelta = { agentId: subjectId, delta: -4 };
             resultText = languageRef.current === "zh" ? "对方公开否认：-15 声望" : "They denied it publicly: -15 rep";
             return finish({ reputation: clamp(agent.reputation - 15, 0, 100) });
           }
-          if (key === "B") return finish({ reputation: clamp(agent.reputation - 8, 0, 100), energy: clamp(energy + 10, 0, 100) });
+          if (key === "B") {
+            affinityDelta = { agentId: subjectId, delta: -2 };
+            return finish({ reputation: clamp(agent.reputation - 8, 0, 100), energy: clamp(energy + 10, 0, 100) });
+          }
           return finish({
             scrip: clamp(agent.scrip - 10, 0, 500),
             reputation: clamp(agent.reputation + (agent.reputation >= 40 ? 20 : 5), 0, 100)
@@ -1005,16 +1143,58 @@ export default function Home() {
         }
 
         if (kind === "social-inv") {
-          if (key === "A") return finish({ reputation: clamp(agent.reputation + 10, 0, 100), energy: clamp(energy - 10, 0, 100), scrip: clamp(agent.scrip - 5, 0, 500) });
+          if (key === "A") {
+            affinityDelta = { agentId: subjectId, delta: 1 };
+            return finish({ reputation: clamp(agent.reputation + 10, 0, 100), energy: clamp(energy - 10, 0, 100), scrip: clamp(agent.scrip - 5, 0, 500) });
+          }
           if (key === "B") return finish({ reputation: clamp(agent.reputation + 4, 0, 100), energy: clamp(energy - 3, 0, 100) });
           return finish({ energy: clamp(energy + 8, 0, 100), reputation: clamp(agent.reputation - 5, 0, 100) });
         }
 
         return finish({});
       });
-      agentsRef.current = next;
-      return next;
-    });
+
+      const next = affinityDelta
+        ? nextWithStats.map(agent => {
+            const delta = affinityDelta!;
+            const other = nextWithStats.find(a => a.id === delta.agentId);
+            if (!other) return agent;
+            if (agent.id === playerBefore.id) {
+              affinityChanges.push({ agentName: other.name, delta: delta.delta });
+              return {
+                ...agent,
+                affinity: {
+                  ...agent.affinity,
+                  [other.id]: clamp((agent.affinity[other.id] ?? 0) + delta.delta, 0, 10)
+                }
+              };
+            }
+            if (agent.id === other.id) {
+              return {
+                ...agent,
+                affinity: {
+                  ...agent.affinity,
+                  [playerBefore.id]: clamp((agent.affinity[playerBefore.id] ?? 0) + delta.delta, 0, 10)
+                }
+              };
+            }
+            return agent;
+          })
+        : nextWithStats;
+    const playerAfter = next.find(agent => agent.id === playerBefore.id) ?? playerBefore;
+    afterStats = agentStats(playerAfter);
+    agentsRef.current = next;
+    setAgents(next);
+
+    setDecisionHistory(cur => [{
+      id: `decision-record-${Date.now()}`,
+      time: nowTime(epochRef.current),
+      situation: prompt.situation,
+      choiceLabel: `${key}: ${option.label}`,
+      statDelta: subtractStats(afterStats, beforeStats),
+      affinityChanges,
+      autoResolved: autonomous
+    }, ...cur].slice(0, 20));
 
     setEvents(cur => [{
       id: `decision-event-${Date.now()}`,
@@ -1124,14 +1304,17 @@ export default function Home() {
     };
     setConversations(cur => [conv, ...cur].slice(0, 30));
 
-    // Update affinity
-    if (result.affinityDelta) {
-      setAgents(cur => cur.map(a => {
-        if (a.id === agentA.id) return { ...a, affinity: { ...a.affinity, [agentB.id]: clamp((a.affinity[agentB.id] ?? 4) + result.affinityDelta, 1, 10) } };
-        if (a.id === agentB.id) return { ...a, affinity: { ...a.affinity, [agentA.id]: clamp((a.affinity[agentA.id] ?? 4) + result.affinityDelta, 1, 10) } };
+    // Update affinity every time agents interact so the network visibly evolves.
+    setAgents(cur => {
+      const affinityDelta = 0.5 + (result.affinityDelta ?? 0);
+      const next = cur.map(a => {
+        if (a.id === agentA.id) return { ...a, affinity: { ...a.affinity, [agentB.id]: clamp((a.affinity[agentB.id] ?? 0) + affinityDelta, 0, 10) } };
+        if (a.id === agentB.id) return { ...a, affinity: { ...a.affinity, [agentA.id]: clamp((a.affinity[agentA.id] ?? 0) + affinityDelta, 0, 10) } };
         return a;
-      }));
-    }
+      });
+      agentsRef.current = next;
+      return next;
+    });
 
     void fetch("/api/agent-dialogue", {
       method: "POST",
@@ -1570,6 +1753,10 @@ export default function Home() {
     setDecisionExpiresAt(null);
     setDecisionSecondsLeft(0);
     setDecisionInput("");
+    setDecisionHistory([]);
+    setDecisionLogOpen(false);
+    setNetworkView("mine");
+    setSelectedNetworkAgentId(null);
     setDailyPlanInput("");
     setTemporaryPromptInput("");
   }
@@ -1730,8 +1917,8 @@ export default function Home() {
 
               {/* Mode toggle */}
               <div className="hidden overflow-hidden rounded-lg border border-white/10 md:flex">
-                <button onClick={() => setGameMode("game")} className={`px-3 py-2 font-mono text-[10px] uppercase transition ${gameMode === "game" ? "bg-cyanline/20 text-cyanline" : "text-slate-500 hover:text-slate-300"}`}>{t.gameMode}</button>
-                <button onClick={() => setGameMode("data")} className={`px-3 py-2 font-mono text-[10px] uppercase transition ${gameMode === "data" ? "bg-amberline/20 text-amberline" : "text-slate-500 hover:text-slate-300"}`}>{t.dataMode}</button>
+                <button onClick={() => setGameMode("game")} className={`px-3 py-2 font-mono text-[10px] uppercase transition ${gameMode === "game" ? "bg-cyanline/20 text-cyanline" : "text-slate-500 hover:text-slate-300"}`}>{t.playerMode}</button>
+                <button onClick={() => setGameMode("data")} className={`px-3 py-2 font-mono text-[10px] uppercase transition ${gameMode === "data" ? "bg-amberline/20 text-amberline" : "text-slate-500 hover:text-slate-300"}`}>{t.observerMode}</button>
               </div>
 
               <button className="hud-button" onClick={() => setIsRunning(v => !v)}>{isRunning ? t.pause : t.run}</button>
@@ -1789,6 +1976,38 @@ export default function Home() {
 
             {/* ── Left Panel ── */}
             <aside className={`${mobileTab === "agent" ? "flex" : "hidden"} flex-col gap-3 md:flex`}>
+              {gameMode === "data" ? (
+                <Panel title={t.civilizationPanel} action={<span className="rounded bg-amberline/15 px-2 py-0.5 font-mono text-[10px] uppercase text-amberline">{t.observerMode}</span>}>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Metric label={t.totalAgents} value={agents.length} />
+                    <Metric label={t.epoch} value={nowTime(epoch)} />
+                    <Metric label={t.giniCoeff} value={gini.toFixed(2)} valueClassName={gini < 0.3 ? "text-mint" : gini <= 0.5 ? "text-amberline" : "text-blood"} />
+                    <Metric label={t.topEarner} value={leaderboard[0]?.name.split(" ")[0] ?? "-"} valueClassName="text-amberline" />
+                    <Metric label={language === "zh" ? "最低财富" : "Bottom Earner"} value={bottomEarner?.name.split(" ")[0] ?? "-"} valueClassName="text-blood" />
+                    <Metric label={t.scripCirculation} value={totalScrip} valueClassName="text-amberline" />
+                    <Metric label={t.avgEnergy} value={`${avgEnergy}%`} valueClassName={avgEnergy > 55 ? "text-mint" : avgEnergy > 30 ? "text-amberline" : "text-blood"} />
+                    <Metric label={t.marketPrices} value={marketRows.find(row => row.good === "compute")?.price.toFixed(1) ?? "-"} valueClassName="text-cyanline" />
+                  </div>
+                  <div className="mt-3 rounded border border-white/10 bg-white/[0.03] p-2">
+                    <p className="mb-2 font-mono text-[10px] uppercase text-slate-500">{t.roster}</p>
+                    <div className="max-h-[420px] space-y-1.5 overflow-auto pr-1">
+                      {leaderboard.map((agent, index) => (
+                        <button
+                          key={agent.id}
+                          onClick={() => setSelectedId(agent.id)}
+                          className={`flex w-full items-center gap-2 rounded border px-2 py-1.5 text-left ${agent.id === selectedId ? "border-amberline/50 bg-amberline/10" : "border-white/10 bg-white/[0.03]"}`}
+                        >
+                          <span className="w-4 font-mono text-[10px] text-slate-500">{index + 1}</span>
+                          <Image className="pixel-icon h-5 w-5" src={roleIcons[agent.role]} alt="" width={24} height={24} />
+                          <span className="min-w-0 flex-1 truncate text-xs text-white">{agent.name}</span>
+                          <span className="font-mono text-[10px] text-amberline">{agentWealth(agent)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </Panel>
+              ) : (
+                <>
 
               {/* Your Agent Card */}
               <Panel title={t.yourAgent} action={
@@ -1848,6 +2067,15 @@ export default function Home() {
                   </div>
                 </div>
               </Panel>
+
+              <DecisionLogPanel
+                title={t.decisionLog}
+                emptyText={t.noDecisions}
+                autoText={t.autoResolved}
+                history={decisionHistory}
+                open={decisionLogOpen}
+                onToggle={() => setDecisionLogOpen(v => !v)}
+              />
 
               {/* Daily Plan */}
               {playerAgent && (
@@ -1981,12 +2209,14 @@ export default function Home() {
                   ))}
                 </div>
               </Panel>
+                </>
+              )}
             </aside>
 
             {/* ── Center: Map ── */}
             <section className={`${mobileTab === "map" ? "flex" : "hidden"} flex-col gap-3 md:flex`}>
               <Panel
-                title={gameMode === "game" ? "Society Space" : "Data Observatory"}
+                title={gameMode === "game" ? "Player Society Space" : "Observer Society Space"}
                 action={
                   <div className="flex items-center gap-2">
                     <span className={`h-2 w-2 rounded-full ${isRunning ? "animate-pulse bg-mint" : "bg-slate-600"}`} />
@@ -2059,11 +2289,14 @@ export default function Home() {
                       <button
                         key={`${agent.id}-sprite`}
                         onClick={() => setSelectedId(agent.id)}
-                        className={`agent-sprite absolute -translate-x-1/2 -translate-y-full transition-[left,top] duration-700 ease-out ${agent.isPlayer ? "z-40" : agent.id === selectedId ? "z-30 scale-125" : "z-20"}`}
+                        className={`agent-sprite absolute -translate-x-1/2 -translate-y-full transition-[left,top] duration-700 ease-out ${gameMode === "game" && agent.isPlayer ? "z-40" : agent.id === selectedId ? "z-30 scale-125" : "z-20"}`}
                         style={{ left: `${motion.x}%`, top: `${motion.y}%` }}
                         title={agent.name}
                       >
-                        {agent.isPlayer && (
+                        {gameMode === "game" && agent.isPlayer && (
+                          <span className="absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full border border-cyanline/70 shadow-[0_0_24px_rgba(69,246,255,.55)]" />
+                        )}
+                        {gameMode === "game" && agent.isPlayer && (
                           <span className="absolute -top-4 left-1/2 -translate-x-1/2 rounded bg-cyanline/90 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase text-void">YOU</span>
                         )}
                         <Image
@@ -2091,7 +2324,7 @@ export default function Home() {
                       onClick={() => setSelectedId(agent.id)}
                       className={`absolute min-w-[88px] -translate-x-1/2 -translate-y-1/2 rounded border px-2 py-1 text-left transition ${
                         agent.id === selectedId ? "scale-110 border-white bg-white text-void" : "border-white/30 bg-void/80 text-white"
-                      } ${agent.isPlayer ? "border-cyanline bg-cyanline/20 text-cyanline" : ""}`}
+                      } ${gameMode === "game" && agent.isPlayer ? "border-cyanline bg-cyanline/20 text-cyanline" : ""}`}
                       style={{ left: `${agent.x}%`, top: `${agent.y}%`, boxShadow: `0 0 18px ${roleColors[agent.role]}44` }}
                     >
                       <span className="flex items-center gap-1">
@@ -2144,21 +2377,38 @@ export default function Home() {
 
               {/* Tab bar */}
               <div className="hud-panel flex overflow-hidden rounded-xl">
-                {(["conversations", "economy", "policy", "events"] as RightTab[]).map(tab => (
+                {(gameMode === "game"
+                  ? (["conversations", "economy", "events"] as RightTab[])
+                  : (["network", "economy", "events", "leaderboard"] as RightTab[])
+                ).map(tab => (
                   <button key={tab} onClick={() => setRightTab(tab)} className={`flex-1 py-2.5 font-mono text-[10px] uppercase tracking-wider transition ${rightTab === tab ? "bg-cyanline/15 text-cyanline" : "text-slate-500 hover:text-slate-300"}`}>
-                    {tab === "conversations" ? t.conversations : tab === "economy" ? t.economy : tab === "policy" ? t.policy : t.events}
+                    {tab === "conversations" ? t.conversations : tab === "economy" ? t.economy : tab === "events" ? t.events : tab === "network" ? t.relationships : t.leaderboard}
                   </button>
                 ))}
               </div>
+
+              {/* Society Network */}
+              {rightTab === "network" && (
+                <RelationshipNetworkPanel
+                  agents={agents}
+                  playerAgent={playerAgent}
+                  selectedId={selectedNetworkAgentId}
+                  onSelect={setSelectedNetworkAgentId}
+                  networkView={networkView}
+                  setNetworkView={setNetworkView}
+                  conversations={conversations}
+                  t={t}
+                />
+              )}
 
               {/* Conversations */}
               {rightTab === "conversations" && (
                 <Panel title={t.conversations}>
                   <div className="max-h-[calc(100vh-280px)] space-y-2 overflow-auto pr-1">
-                    {conversations.length === 0 && (
+                    {displayedConversations.length === 0 && (
                       <p className="py-6 text-center font-mono text-xs text-slate-600">Waiting for agents to talk…</p>
                     )}
-                    {conversations.map(conv => {
+                    {displayedConversations.map(conv => {
                       const isPlayerConv = conv.agentIds.includes("player") || conv.agentIds[0] === "system";
                       return (
                         <div key={conv.id} className={`rounded-lg border p-2.5 ${isPlayerConv ? "border-cyanline/30 bg-cyanline/[0.05]" : "border-white/10 bg-white/[0.03]"}`}>
@@ -2241,7 +2491,7 @@ export default function Home() {
               )}
 
               {/* Policy */}
-              {rightTab === "policy" && (
+              {false && (
                 <Panel title={t.policyChamber}>
                   <div className="space-y-3">
                     <div className="flex gap-2">
@@ -2287,13 +2537,30 @@ export default function Home() {
               {rightTab === "events" && (
                 <Panel title={t.worldEvents}>
                   <div className="max-h-[calc(100vh-280px)] space-y-2 overflow-auto pr-1">
-                    {events.map(ev => (
+                    {displayedEvents.map(ev => (
                       <div key={ev.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5">
                         <div className="mb-1 flex justify-between font-mono text-[10px] uppercase text-slate-500">
                           <span>{ev.kind}</span>
                           <span>{ev.time}</span>
                         </div>
                         <p className="text-xs leading-5 text-slate-300">{ev.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+              )}
+
+              {/* Leaderboard */}
+              {rightTab === "leaderboard" && (
+                <Panel title={t.leaderboard}>
+                  <div className="space-y-1.5">
+                    {leaderboard.map((agent, i) => (
+                      <div key={agent.id} className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 ${agent.isPlayer ? "border-cyanline/40 bg-cyanline/5" : "border-white/10 bg-white/[0.03]"}`}>
+                        <span className="w-4 shrink-0 font-mono text-[10px] text-slate-500">{i + 1}.</span>
+                        <Image className="pixel-icon h-5 w-5 shrink-0" src={roleIcons[agent.role]} alt="" width={24} height={24} />
+                        <span className="min-w-0 flex-1 truncate text-xs text-white">{agent.name}</span>
+                        {agent.isPlayer && <span className="shrink-0 rounded bg-cyanline/20 px-1 font-mono text-[9px] text-cyanline">YOU</span>}
+                        <span className="shrink-0 font-mono text-xs font-black text-amberline">{agentWealth(agent)}</span>
                       </div>
                     ))}
                   </div>
@@ -2401,6 +2668,257 @@ export default function Home() {
 }
 
 // ─── Shared UI Components ────────────────────────────────────────────────────
+
+function DecisionLogPanel({
+  title,
+  emptyText,
+  autoText,
+  history,
+  open,
+  onToggle
+}: {
+  title: string;
+  emptyText: string;
+  autoText: string;
+  history: DecisionRecord[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <section className="hud-panel rounded-xl p-3">
+      <button onClick={onToggle} className="flex w-full items-center justify-between gap-2 border-b border-white/10 pb-2 text-left">
+        <h2 className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-cyanline">{title}</h2>
+        <span className="font-mono text-[10px] text-slate-500">{open ? "[-]" : "[+]"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 max-h-[340px] space-y-2 overflow-auto pr-1">
+          {history.length === 0 && <p className="py-4 text-center font-mono text-xs text-slate-600">{emptyText}</p>}
+          {history.slice(0, 10).map(record => (
+            <div key={record.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-[10px] uppercase text-slate-500">{record.time}</p>
+                  <p className="truncate text-xs font-bold text-white">{record.choiceLabel}</p>
+                </div>
+                {record.autoResolved && (
+                  <span className="shrink-0 rounded border border-blood/40 bg-blood/10 px-1.5 py-0.5 font-mono text-[9px] uppercase text-blood">{autoText}</span>
+                )}
+              </div>
+              <p className="mb-2 line-clamp-2 text-[11px] leading-4 text-slate-400">{record.situation}</p>
+              <div className="flex flex-wrap gap-1">
+                {Object.entries(record.statDelta).map(([key, value]) => (
+                  <DeltaChip key={key} label={key} value={value} />
+                ))}
+              </div>
+              {record.affinityChanges.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {record.affinityChanges.map(change => (
+                    <span key={`${record.id}-${change.agentName}`} className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${change.delta >= 0 ? "border-mint/30 bg-mint/10 text-mint" : "border-blood/30 bg-blood/10 text-blood"}`}>
+                      {change.delta >= 0 ? "↑" : "↓"} {change.agentName.split(" ")[0]} {change.delta >= 0 ? "+" : ""}{change.delta}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DeltaChip({ label, value }: { label: string; value: number }) {
+  const tone = value > 0
+    ? "border-mint/30 bg-mint/10 text-mint"
+    : value < 0
+      ? "border-blood/30 bg-blood/10 text-blood"
+      : "border-white/10 bg-white/[0.04] text-slate-500";
+  return (
+    <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${tone}`}>
+      {value > 0 ? "+" : ""}{value} {label}
+    </span>
+  );
+}
+
+function RelationshipNetworkPanel({
+  agents,
+  playerAgent,
+  selectedId,
+  onSelect,
+  networkView,
+  setNetworkView,
+  conversations,
+  t
+}: {
+  agents: Agent[];
+  playerAgent: Agent | null;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  networkView: NetworkView;
+  setNetworkView: (view: NetworkView) => void;
+  conversations: Conversation[];
+  t: CopyText;
+}) {
+  return (
+    <Panel title={t.relationships} action={
+      <div className="flex overflow-hidden rounded border border-white/10">
+        <button onClick={() => setNetworkView("mine")} className={`px-2 py-1 font-mono text-[9px] uppercase ${networkView === "mine" ? "bg-cyanline/15 text-cyanline" : "text-slate-500"}`}>{t.myNetwork}</button>
+        <button onClick={() => setNetworkView("society")} className={`px-2 py-1 font-mono text-[9px] uppercase ${networkView === "society" ? "bg-amberline/15 text-amberline" : "text-slate-500"}`}>{t.societyView}</button>
+      </div>
+    }>
+      {networkView === "mine"
+        ? <MyNetworkGraph agents={agents} playerAgent={playerAgent} selectedId={selectedId} onSelect={onSelect} conversations={conversations} t={t} />
+        : <SocietyNetworkGraph agents={agents} playerAgent={playerAgent} t={t} />}
+    </Panel>
+  );
+}
+
+function MyNetworkGraph({
+  agents,
+  playerAgent,
+  selectedId,
+  onSelect,
+  conversations,
+  t
+}: {
+  agents: Agent[];
+  playerAgent: Agent | null;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  conversations: Conversation[];
+  t: CopyText;
+}) {
+  if (!playerAgent) {
+    return <p className="py-8 text-center font-mono text-xs text-slate-600">Create an agent to inspect relationships.</p>;
+  }
+
+  const relations = Object.entries(playerAgent.affinity)
+    .map(([id, affinity]) => ({ agent: agents.find(a => a.id === id), affinity }))
+    .filter((item): item is { agent: Agent; affinity: number } => Boolean(item.agent) && item.affinity > 0)
+    .sort((a, b) => b.affinity - a.affinity);
+  const selected = relations.find(item => item.agent.id === selectedId) ?? relations[0];
+  const topAllies = relations.slice(0, 3);
+  const weakBonds = relations.filter(item => item.affinity >= 1 && item.affinity <= 3).length;
+  const lastInteraction = (agentId: string) => conversations.find(conv =>
+    conv.agentIds.includes(playerAgent.id) && conv.agentIds.includes(agentId)
+  )?.time ?? "-";
+
+  return (
+    <div className="space-y-3">
+      <svg viewBox="0 0 400 320" width="100%" className="rounded-lg border border-cyanline/15 bg-cyanline/[0.03]">
+        <defs>
+          <filter id="networkGlow">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+        <circle cx="200" cy="150" r="34" fill="rgba(69,246,255,.14)" stroke="#45f6ff" strokeWidth="3" filter="url(#networkGlow)" />
+        <text x="200" y="154" textAnchor="middle" className="fill-white text-[11px] font-bold">{playerAgent.name.split(" ")[0]}</text>
+        <text x="200" y="170" textAnchor="middle" className="fill-cyanline text-[9px] uppercase">{t.roles[playerAgent.role]}</text>
+        {relations.map((item, index) => {
+          const angle = (index / Math.max(1, relations.length)) * Math.PI * 2 - Math.PI / 2;
+          const x = 200 + Math.cos(angle) * 126;
+          const y = 150 + Math.sin(angle) * 96;
+          const edgeColor = item.affinity >= 7 ? "#79ffbf" : item.affinity >= 4 ? "#ffca63" : "#ff496d";
+          const nodeRadius = 12 + item.affinity * 2;
+          return (
+            <g key={item.agent.id}>
+              <line x1="200" y1="150" x2={x} y2={y} stroke={edgeColor} strokeWidth={(item.affinity / 10) * 4} opacity="0.75" />
+              <g onClick={() => onSelect(item.agent.id)} className="cursor-pointer">
+                <circle cx={x} cy={y} r={nodeRadius} fill={`${roleColors[item.agent.role]}33`} stroke={selectedId === item.agent.id ? "#ffffff" : roleColors[item.agent.role]} strokeWidth={selectedId === item.agent.id ? 3 : 2} />
+                <text x={x} y={y + nodeRadius + 13} textAnchor="middle" className="fill-white text-[10px] font-bold">{item.agent.name.split(" ")[0]}</text>
+              </g>
+            </g>
+          );
+        })}
+      </svg>
+      {selected && (
+        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-white">{selected.agent.name}</span>
+            <span className="font-mono text-[10px]" style={{ color: roleColors[selected.agent.role] }}>{t.roles[selected.agent.role]}</span>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Metric label={t.trust} value={selected.affinity.toFixed(1)} valueClassName={selected.affinity >= 7 ? "text-mint" : selected.affinity >= 4 ? "text-amberline" : "text-blood"} />
+            <Metric label={t.lastInteraction} value={lastInteraction(selected.agent.id)} />
+          </div>
+        </div>
+      )}
+      <div className="space-y-2">
+        {topAllies.map(item => (
+          <div key={item.agent.id}>
+            <div className="mb-1 flex justify-between font-mono text-[10px] text-slate-400">
+              <span>{item.agent.name}</span>
+              <span>{item.affinity.toFixed(1)}/10</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded bg-white/10">
+              <div className="h-full rounded bg-mint" style={{ width: `${item.affinity * 10}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+      <Metric label={t.weakBonds} value={weakBonds} valueClassName={weakBonds > 0 ? "text-blood" : "text-mint"} />
+    </div>
+  );
+}
+
+function SocietyNetworkGraph({ agents, playerAgent, t }: { agents: Agent[]; playerAgent: Agent | null; t: CopyText }) {
+  const positions = agents.map((agent, index) => {
+    const angle = (index / Math.max(1, agents.length)) * Math.PI * 2 - Math.PI / 2;
+    return { agent, x: 200 + Math.cos(angle) * 135, y: 142 + Math.sin(angle) * 100 };
+  });
+  const edges: Array<{ source: Agent; target: Agent; affinity: number }> = [];
+  const seen = new Set<string>();
+  for (const agent of agents) {
+    for (const [targetId, affinity] of Object.entries(agent.affinity)) {
+      if (affinity < 3) continue;
+      const target = agents.find(a => a.id === targetId);
+      if (!target) continue;
+      const key = [agent.id, target.id].sort().join(":");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const reciprocal = target.affinity[agent.id] ?? affinity;
+      edges.push({ source: agent, target, affinity: (affinity + reciprocal) / 2 });
+    }
+  }
+  const totals = agents.map(agent => ({
+    agent,
+    total: Object.values(agent.affinity).reduce((sum, value) => sum + value, 0)
+  })).sort((a, b) => b.total - a.total);
+  const avgAffinity = edges.length ? edges.reduce((sum, edge) => sum + edge.affinity, 0) / edges.length : 0;
+  const activeBonds = edges.filter(edge => edge.affinity >= 5).length;
+
+  return (
+    <div className="space-y-3">
+      <svg viewBox="0 0 400 320" width="100%" className="rounded-lg border border-cyanline/15 bg-cyanline/[0.03]">
+        {edges.map(edge => {
+          const source = positions.find(pos => pos.agent.id === edge.source.id);
+          const target = positions.find(pos => pos.agent.id === edge.target.id);
+          if (!source || !target) return null;
+          return (
+            <line key={`${edge.source.id}-${edge.target.id}`} x1={source.x} y1={source.y} x2={target.x} y2={target.y}
+              stroke={edge.affinity >= 7 ? "#79ffbf" : edge.affinity >= 4 ? "#ffca63" : "#ff496d"}
+              strokeWidth={1 + (edge.affinity / 10) * 3}
+              opacity={edge.affinity / 10}
+            />
+          );
+        })}
+        {positions.map(pos => (
+          <g key={pos.agent.id}>
+            <circle cx={pos.x} cy={pos.y} r="18" fill={`${roleColors[pos.agent.role]}33`} stroke={pos.agent.id === playerAgent?.id ? "#45f6ff" : roleColors[pos.agent.role]} strokeWidth={pos.agent.id === playerAgent?.id ? 3 : 2} />
+            <text x={pos.x} y={pos.y + 31} textAnchor="middle" className="fill-white text-[10px] font-bold">{pos.agent.name.split(" ")[0]}</text>
+          </g>
+        ))}
+      </svg>
+      <div className="grid grid-cols-2 gap-2">
+        <Metric label={t.activeBonds} value={activeBonds} valueClassName="text-mint" />
+        <Metric label={t.avgAffinity} value={avgAffinity.toFixed(1)} valueClassName="text-cyanline" />
+        <Metric label={t.socialHub} value={totals[0]?.agent.name.split(" ")[0] ?? "-"} valueClassName="text-amberline" />
+        <Metric label={t.loner} value={totals[totals.length - 1]?.agent.name.split(" ")[0] ?? "-"} valueClassName="text-blood" />
+      </div>
+    </div>
+  );
+}
 
 function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
