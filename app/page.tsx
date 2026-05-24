@@ -437,6 +437,8 @@ export default function Home() {
   const [lanIp,          setLanIp]          = useState("192.168.0.105");
   const [showLmSettings, setShowLmSettings] = useState(false);
   const [pendingDecision, setPendingDecision] = useState<DecisionPrompt | null>(null);
+  const [decisionExpiresAt, setDecisionExpiresAt] = useState<number | null>(null);
+  const [decisionSecondsLeft, setDecisionSecondsLeft] = useState(0);
   const [decisionInput,  setDecisionInput]  = useState("");
   const [dailyPlanInput, setDailyPlanInput] = useState("");
   const [temporaryPromptInput, setTemporaryPromptInput] = useState("");
@@ -539,9 +541,31 @@ export default function Home() {
 
   useEffect(() => {
     if (isRunning) return;
+    pendingDecisionRef.current = null;
     setPendingDecision(null);
+    setDecisionExpiresAt(null);
+    setDecisionSecondsLeft(0);
     setDecisionInput("");
   }, [isRunning]);
+
+  useEffect(() => {
+    if (!decisionExpiresAt || !pendingDecision) {
+      setDecisionSecondsLeft(0);
+      return;
+    }
+
+    const tick = () => {
+      const left = Math.ceil((decisionExpiresAt - Date.now()) / 1000);
+      setDecisionSecondsLeft(Math.max(0, left));
+      if (left <= 0 && pendingDecisionRef.current) {
+        applyDecisionChoice(pendingDecisionRef.current, "B", true);
+      }
+    };
+
+    tick();
+    const timer = window.setInterval(tick, 500);
+    return () => window.clearInterval(timer);
+  }, [decisionExpiresAt, pendingDecision]);
 
   useEffect(() => {
     window.localStorage.setItem(PLAYER_KEY, JSON.stringify({ agentId: playerAgentId, phase }));
@@ -689,7 +713,11 @@ export default function Home() {
     const timer = window.setInterval(() => {
       if (pendingDecisionRef.current) return;
       const prompt = createDecisionPrompt();
-      if (prompt) setPendingDecision(prompt);
+      if (prompt) {
+        setPendingDecision(prompt);
+        setDecisionExpiresAt(Date.now() + 45000);
+        setDecisionSecondsLeft(45);
+      }
     }, 30000);
     return () => window.clearInterval(timer);
   }, [isRunning, phase]);
@@ -763,109 +791,103 @@ export default function Home() {
     const player = currentAgents.find(a => a.id === playerId) ?? currentAgents.find(a => a.isPlayer);
     if (!player || currentAgents.length < 1) return null;
 
-    const nonPlayerAgents = currentAgents.filter(a => a.id !== player.id);
-    const pickAgent = () => nonPlayerAgents[Math.floor(Math.random() * nonPlayerAgents.length)] ?? player;
-    const pickTwoAgents = () => {
-      const first = pickAgent();
-      const candidates = nonPlayerAgents.filter(a => a.id !== first.id);
-      const second = candidates[Math.floor(Math.random() * candidates.length)] ?? player;
-      return [first, second] as const;
-    };
-
-    const agent = pickAgent();
-    const [allyA, allyB] = pickTwoAgents();
-    const highRiskReward = 10 + Math.floor(Math.random() * 11);
-    const scripAsk = 12 + Math.floor(Math.random() * 29);
+    const debtAmount = Math.floor(Math.random() * 20) + 10;
     const zh = languageRef.current === "zh";
     const bank: DecisionPrompt[] = [
       {
-        id: `decision-contract-${Date.now()}`,
+        id: `decision-hrc-${Date.now()}`,
         situation: zh
-          ? `${agent.name} 申请重新谈判合约。工票：${scripAsk}。`
-          : `${agent.name} requests to renegotiate contract. Scrip: ${scripAsk}.`,
-        triggeredBy: `contract|${agent.id}|${scripAsk}`,
+          ? `紧急高风险合约到来，奖励丰厚但耗能巨大。当前能量：${player.energy ?? 80}。`
+          : `High-risk contract arrived. Big reward but drains energy. Current energy: ${player.energy ?? 80}.`,
+        triggeredBy: "hrc",
         options: [
-          { key: "A", label: zh ? "批准" : "Approve",      effect: zh ? `${agent.name} 声望+10，${player.name} 工票-5` : `${agent.name} +10 rep, ${player.name} -5 scrip` },
-          { key: "B", label: zh ? "拒绝" : "Reject",       effect: zh ? `${player.name} 声望+2` : `${player.name} +2 rep` },
-          { key: "C", label: zh ? "还价" : "CounterOffer", effect: zh ? `${agent.name} 工票+5，${player.name} 声望+3` : `${agent.name} +5 scrip, ${player.name} +3 rep` }
+          { key: "A", label: zh ? "接受" : "Accept", effect: zh ? "+25 工票，-20 能量，-8 声望" : "+25 scrip, -20 energy, -8 rep" },
+          { key: "B", label: zh ? "拒绝" : "Decline", effect: zh ? "无变化，错过机会" : "No change, miss opportunity" },
+          { key: "C", label: zh ? "赌一把" : "Gamble", effect: zh ? "50/50：成功 +35 工票 -10 能量；失败 -15 工票 -10 声望" : "50/50: success +35 scrip -10 energy; fail -15 scrip -10 rep" }
         ]
       },
       {
-        id: `decision-market-${Date.now()}`,
+        id: `decision-rep-attack-${Date.now()}`,
         situation: zh
-          ? "市场环算力供过于求，价格下跌。"
-          : "MARKET RING oversupplied with compute. Prices falling.",
-        triggeredBy: "market",
+          ? `有人在议会公开质疑你的声望。当前声望：${player.reputation}。`
+          : `Someone publicly challenged your reputation in the Assembly. Current rep: ${player.reputation}.`,
+        triggeredBy: "rep-attack",
         options: [
-          { key: "A", label: zh ? "稳定价格" : "Stabilize",  effect: zh ? "重置算力价格" : "Reset compute price" },
-          { key: "B", label: zh ? "顺势而为" : "LetFall",    effect: zh ? "全体算力 -20%" : "All compute -20%" },
-          { key: "C", label: zh ? "收购剩余" : "BuySurplus", effect: zh ? `${player.name} 工票-10，算力+15` : `${player.name} -10 scrip, +15 compute` }
+          { key: "A", label: zh ? "辩护" : "Defend", effect: zh ? "声望>=50：+8 声望 -5 能量；否则 -10 声望 -5 能量" : "If rep>=50: +8 rep -5 energy; otherwise -10 rep -5 energy" },
+          { key: "B", label: zh ? "忽略" : "Ignore", effect: zh ? "-5 声望" : "-5 rep" },
+          { key: "C", label: zh ? "道歉" : "Apologize", effect: zh ? "-12 声望，+10 能量" : "-12 rep, +10 energy" }
         ]
       },
       {
-        id: `decision-alliance-${Date.now()}`,
+        id: `decision-debt-${Date.now()}`,
         situation: zh
-          ? `${allyA.name} 希望与 ${allyB.name} 结盟。`
-          : `${allyA.name} wants alliance with ${allyB.name}.`,
-        triggeredBy: `alliance|${allyA.id}|${allyB.id}`,
+          ? `另一位智能体拖欠了你的工票。欠款：${debtAmount}。`
+          : `Another agent owes you scrip. Debt: ${debtAmount}.`,
+        triggeredBy: `debt|${debtAmount}`,
         options: [
-          { key: "A", label: zh ? "背书" : "Endorse", effect: zh ? "双方声望+3" : "Both +3 rep" },
-          { key: "B", label: zh ? "阻止" : "Block",   effect: zh ? "无变化" : "No change" },
-          { key: "C", label: zh ? "调解" : "Mediate", effect: zh ? `双方声望+1，${player.name} 声望+5` : `Both +1 rep, ${player.name} +5 rep` }
+          { key: "A", label: zh ? "强制追收" : "Enforce", effect: zh ? `+${debtAmount} 工票，-8 声望` : `+${debtAmount} scrip, -8 rep` },
+          { key: "B", label: zh ? "免除" : "Forgive", effect: zh ? "+15 声望，0 工票" : "+15 rep, 0 scrip" },
+          { key: "C", label: zh ? "折中" : "Partial", effect: zh ? `+${Math.floor(debtAmount / 2)} 工票，+5 声望` : `+${Math.floor(debtAmount / 2)} scrip, +5 rep` }
         ]
       },
       {
-        id: `decision-dividends-${Date.now()}`,
-        situation: zh ? "纪元结束，如何分配红利？" : "Epoch close. Distribute dividends?",
-        triggeredBy: "dividends",
-        options: [
-          { key: "A", label: zh ? "平均分配" : "EqualSplit",  effect: zh ? "全体工票+8" : "All +8 scrip" },
-          { key: "B", label: zh ? "绩效优先" : "MeritBased",  effect: zh ? "前3名工票+20" : "Top 3 +20 scrip" },
-          { key: "C", label: zh ? "再投资" : "Reinvest",      effect: zh ? "全体算力+5" : "All +5 compute" }
-        ]
-      },
-      {
-        id: `decision-risk-${Date.now()}`,
-        situation: zh ? "高风险合约到来，指派给哪个角色？" : "High-risk contract arrived. Assign role?",
-        triggeredBy: `risk|${highRiskReward}`,
-        options: [
-          { key: "A", label: zh ? "建筑师" : "Architect",    effect: zh ? `${player.name} 工票+20` : `${player.name} +20 scrip` },
-          { key: "B", label: zh ? "中间商" : "Broker",       effect: zh ? `${player.name} 工票+15` : `${player.name} +15 scrip` },
-          { key: "C", label: zh ? "公开招标" : "OpenTender", effect: zh ? `随机智能体工票+10~${highRiskReward}` : `Random agent +10-${highRiskReward} scrip` }
-        ]
-      },
-      {
-        id: `decision-morale-${Date.now()}`,
+        id: `decision-energy-crisis-${Date.now()}`,
         situation: zh
-          ? `${agent.name} 报告士气低落。状态：${agent.status}。`
-          : `${agent.name} reports low morale. Status: ${agent.status}.`,
-        triggeredBy: `morale|${agent.id}`,
+          ? `你的智能体已经连续工作过久，能量严重不足。当前能量：${player.energy ?? 80}。`
+          : `Your agent has been overworked. Energy critically low: ${player.energy ?? 80}.`,
+        triggeredBy: "energy-crisis",
         options: [
-          { key: "A", label: zh ? "准许休息" : "GrantRest", effect: zh ? `${agent.name} 算力+10，进入休闲状态` : `${agent.name} +10 compute, set idle 2 ticks` },
-          { key: "B", label: zh ? "重新分配" : "Reassign",  effect: zh ? `${agent.name} 声望+5` : `${agent.name} +5 rep` },
-          { key: "C", label: zh ? "忽略" : "Ignore",        effect: zh ? "无变化" : "No change" }
+          { key: "A", label: zh ? "充分休息" : "Rest fully", effect: zh ? "+25 能量，-10 工票" : "+25 energy, -10 scrip" },
+          { key: "B", label: zh ? "快速进食" : "Quick meal", effect: zh ? "+12 饱腹，+5 能量，-8 工票" : "+12 satiety, +5 energy, -8 scrip" },
+          { key: "C", label: zh ? "硬撑" : "Push through", effect: zh ? "-15 能量；低于 5 时额外 -20 声望" : "-15 energy; if below 5, also -20 rep" }
         ]
       },
       {
-        id: `decision-cap-${Date.now()}`,
-        situation: zh ? "议会提议：将个人工票上限设为 300。" : "Assembly proposes scrip cap at 300.",
-        triggeredBy: "cap",
-        options: [
-          { key: "A", label: zh ? "批准" : "Approve", effect: zh ? "所有人工票上限 300" : "Cap all scrip at 300" },
-          { key: "B", label: zh ? "否决" : "Reject",  effect: zh ? "无变化" : "No change" },
-          { key: "C", label: zh ? "修正" : "Amend",   effect: zh ? "所有人工票上限 400" : "Cap all scrip at 400" }
-        ]
-      },
-      {
-        id: `decision-cache-${Date.now()}`,
+        id: `decision-market-opp-${Date.now()}`,
         situation: zh
-          ? `${agent.name} 在外围网格发现资源缓存。`
-          : `${agent.name} found resource cache in OUTER GRID.`,
-        triggeredBy: `cache|${agent.id}`,
+          ? "市场出现短暂套利窗口，但需要提前投入工票。"
+          : "A brief market arbitrage window opened. Requires upfront scrip.",
+        triggeredBy: "market-opp",
         options: [
-          { key: "A", label: zh ? "占有" : "Claim",   effect: zh ? `${player.name} 工票+20` : `${player.name} +20 scrip` },
-          { key: "B", label: zh ? "共享" : "Share",   effect: zh ? "全体工票+8" : "All +8 scrip" },
-          { key: "C", label: zh ? "存档" : "Archive", effect: zh ? `${player.name} 声望+10` : `${player.name} +10 rep` }
+          { key: "A", label: zh ? "大额投入" : "Invest big", effect: zh ? "若工票>=20：60% +40 工票；40% -20 工票" : "If scrip>=20: 60% +40 scrip; 40% -20 scrip" },
+          { key: "B", label: zh ? "小额投入" : "Invest small", effect: zh ? "投入 -8，返还 +12，净 +4 工票" : "Spend -8, return +12, net +4 scrip" },
+          { key: "C", label: zh ? "跳过" : "Skip", effect: zh ? "无变化" : "No change" }
+        ]
+      },
+      {
+        id: `decision-betrayal-${Date.now()}`,
+        situation: zh
+          ? "你最信任的盟友在背后分享了你的计划。"
+          : "Your most-trusted ally leaked your plans to others.",
+        triggeredBy: "betrayal",
+        options: [
+          { key: "A", label: zh ? "当面对质" : "Confront", effect: zh ? "50/50：+10 声望 或 -15 声望" : "50/50: +10 rep or -15 rep" },
+          { key: "B", label: zh ? "放下" : "Let go", effect: zh ? "-8 声望，+10 能量" : "-8 rep, +10 energy" },
+          { key: "C", label: zh ? "报告" : "Report", effect: zh ? "-10 工票；声望>=40 时 +20 声望，否则 +5 声望" : "-10 scrip; +20 rep if rep>=40, otherwise +5 rep" }
+        ]
+      },
+      {
+        id: `decision-shortage-${Date.now()}`,
+        situation: zh
+          ? `你的工票储备不足以维持下一纪元的基本开销。当前工票：${player.scrip}。`
+          : `Your scrip reserve is insufficient for next epoch upkeep. Current: ${player.scrip}.`,
+        triggeredBy: "shortage",
+        options: [
+          { key: "A", label: zh ? "借款" : "Borrow", effect: zh ? "+20 工票，并立即模拟下一纪元 -30 成本，净 -10" : "+20 scrip now, immediately simulate -30 next-epoch cost, net -10" },
+          { key: "B", label: zh ? "削减开销" : "Cut costs", effect: zh ? "-15 能量，-5 声望" : "-15 energy, -5 rep" },
+          { key: "C", label: zh ? "紧急合约" : "Emergency contract", effect: zh ? "+15 工票，-18 能量" : "+15 scrip, -18 energy" }
+        ]
+      },
+      {
+        id: `decision-social-inv-${Date.now()}`,
+        situation: zh
+          ? "你收到多个社交邀请，但时间和精力有限，只能选一个。"
+          : "You received multiple social invitations but can only attend one.",
+        triggeredBy: "social-inv",
+        options: [
+          { key: "A", label: zh ? "高曝光活动" : "High-profile event", effect: zh ? "+10 声望，-10 能量，-5 工票" : "+10 rep, -10 energy, -5 scrip" },
+          { key: "B", label: zh ? "小型聚会" : "Small gathering", effect: zh ? "+4 声望，-3 能量" : "+4 rep, -3 energy" },
+          { key: "C", label: zh ? "待在家里" : "Stay home", effect: zh ? "+8 能量，-5 声望" : "+8 energy, -5 rep" }
         ]
       }
     ];
@@ -873,111 +895,123 @@ export default function Home() {
     return bank[Math.floor(Math.random() * bank.length)];
   }
 
-  function applyDecisionChoice(prompt: DecisionPrompt, key: "A" | "B" | "C") {
+  function applyDecisionChoice(prompt: DecisionPrompt, key: "A" | "B" | "C", autonomous = false) {
     const option = prompt.options.find(o => o.key === key);
     if (!option) return;
 
-    const [kind, firstId, secondId] = (prompt.triggeredBy ?? "").split("|");
+    const [kind, value] = (prompt.triggeredBy ?? "").split("|");
     const playerId = playerAgentIdRef.current;
+    let resultText = option.effect;
 
     setAgents(prev => {
-      let next = [...prev];
-      const player = next.find(a => a.id === playerId) ?? next.find(a => a.isPlayer);
-      const playerAgentId = player?.id;
+      const next = prev.map(agent => {
+        if (agent.id !== playerId && !agent.isPlayer) return agent;
 
-      const updateAgent = (id: string | undefined, patch: (agent: Agent) => Agent) => {
-        if (!id) return;
-        next = next.map(agent => agent.id === id ? patch(agent) : agent);
-      };
-      const updatePlayer = (patch: (agent: Agent) => Agent) => {
-        if (playerAgentId) updateAgent(playerAgentId, patch);
-      };
+        const energy = agent.energy ?? 80;
+        const satiety = agent.satiety ?? 75;
+        const finish = (patch: Partial<Agent>): Agent => ({
+          ...agent,
+          ...patch,
+          currentMission: autonomous ? "Autonomous fallback decision" : `Decision: ${option.label}`,
+          status: autonomous
+            ? `Acted autonomously: ${option.label}`
+            : `Chose decision option ${key}: ${option.label}`
+        });
 
-      if (kind === "contract") {
-        if (key === "A") {
-          updateAgent(firstId, agent => ({ ...agent, reputation: clamp(agent.reputation + 10, 0, 100) }));
-          updatePlayer(agent => ({ ...agent, scrip: clamp(agent.scrip - 5, 0, 500) }));
-        } else if (key === "B") {
-          updatePlayer(agent => ({ ...agent, reputation: clamp(agent.reputation + 2, 0, 100) }));
-        } else {
-          updateAgent(firstId, agent => ({ ...agent, scrip: clamp(agent.scrip + 5, 0, 500) }));
-          updatePlayer(agent => ({ ...agent, reputation: clamp(agent.reputation + 3, 0, 100) }));
+        if (kind === "hrc") {
+          if (key === "A") {
+            return finish({
+              scrip: clamp(agent.scrip + 25, 0, 500),
+              energy: clamp(energy - 20, 0, 100),
+              reputation: clamp(agent.reputation - 8, 0, 100)
+            });
+          }
+          if (key === "C") {
+            if (Math.random() >= 0.5) {
+              resultText = languageRef.current === "zh" ? "赌约成功：+35 工票，-10 能量" : "Gamble succeeded: +35 scrip, -10 energy";
+              return finish({ scrip: clamp(agent.scrip + 35, 0, 500), energy: clamp(energy - 10, 0, 100) });
+            }
+            resultText = languageRef.current === "zh" ? "赌约失败：-15 工票，-10 声望" : "Gamble failed: -15 scrip, -10 rep";
+            return finish({ scrip: clamp(agent.scrip - 15, 0, 500), reputation: clamp(agent.reputation - 10, 0, 100) });
+          }
+          return finish({});
         }
-      } else if (kind === "market") {
-        if (key === "A") {
-          setMarketPrices(cur => ({ ...cur, compute: INITIAL_MARKET.compute }));
-        } else if (key === "B") {
-          next = next.map(agent => ({ ...agent, compute: clamp(Math.floor(agent.compute * 0.8), 0, 150) }));
-        } else {
-          updatePlayer(agent => ({
-            ...agent,
+
+        if (kind === "rep-attack") {
+          if (key === "A") {
+            const repDelta = agent.reputation >= 50 ? 8 : -10;
+            resultText = agent.reputation >= 50
+              ? (languageRef.current === "zh" ? "辩护成功：+8 声望，-5 能量" : "Defense worked: +8 rep, -5 energy")
+              : (languageRef.current === "zh" ? "辩护反噬：-10 声望，-5 能量" : "Defense backfired: -10 rep, -5 energy");
+            return finish({ reputation: clamp(agent.reputation + repDelta, 0, 100), energy: clamp(energy - 5, 0, 100) });
+          }
+          if (key === "B") return finish({ reputation: clamp(agent.reputation - 5, 0, 100) });
+          return finish({ reputation: clamp(agent.reputation - 12, 0, 100), energy: clamp(energy + 10, 0, 100) });
+        }
+
+        if (kind === "debt") {
+          const debtAmount = Number(value) || 0;
+          if (key === "A") return finish({ scrip: clamp(agent.scrip + debtAmount, 0, 500), reputation: clamp(agent.reputation - 8, 0, 100) });
+          if (key === "B") return finish({ reputation: clamp(agent.reputation + 15, 0, 100) });
+          return finish({ scrip: clamp(agent.scrip + Math.floor(debtAmount / 2), 0, 500), reputation: clamp(agent.reputation + 5, 0, 100) });
+        }
+
+        if (kind === "energy-crisis") {
+          if (key === "A") return finish({ energy: clamp(energy + 25, 0, 100), scrip: clamp(agent.scrip - 10, 0, 500) });
+          if (key === "B") return finish({ satiety: clamp(satiety + 12, 0, 100), energy: clamp(energy + 5, 0, 100), scrip: clamp(agent.scrip - 8, 0, 500) });
+          const nextEnergy = energy - 15;
+          const burnedOut = nextEnergy < 5;
+          if (burnedOut) resultText = languageRef.current === "zh" ? "硬撑导致崩溃：-15 能量，-20 声望" : "Burnout: -15 energy, -20 rep";
+          return finish({ energy: clamp(nextEnergy, 0, 100), reputation: clamp(agent.reputation + (burnedOut ? -20 : 0), 0, 100) });
+        }
+
+        if (kind === "market-opp") {
+          if (key === "A") {
+            if (agent.scrip < 20) {
+              resultText = languageRef.current === "zh" ? "工票不足，无法大额投入" : "Insufficient scrip for big investment";
+              return finish({});
+            }
+            if (Math.random() < 0.6) {
+              resultText = languageRef.current === "zh" ? "套利成功：+40 工票" : "Arbitrage succeeded: +40 scrip";
+              return finish({ scrip: clamp(agent.scrip + 40, 0, 500) });
+            }
+            resultText = languageRef.current === "zh" ? "套利失败：-20 工票" : "Arbitrage failed: -20 scrip";
+            return finish({ scrip: clamp(agent.scrip - 20, 0, 500) });
+          }
+          if (key === "B") return finish({ scrip: clamp(agent.scrip + 4, 0, 500) });
+          return finish({});
+        }
+
+        if (kind === "betrayal") {
+          if (key === "A") {
+            if (Math.random() >= 0.5) {
+              resultText = languageRef.current === "zh" ? "对质成功：+10 声望" : "Confrontation vindicated you: +10 rep";
+              return finish({ reputation: clamp(agent.reputation + 10, 0, 100) });
+            }
+            resultText = languageRef.current === "zh" ? "对方公开否认：-15 声望" : "They denied it publicly: -15 rep";
+            return finish({ reputation: clamp(agent.reputation - 15, 0, 100) });
+          }
+          if (key === "B") return finish({ reputation: clamp(agent.reputation - 8, 0, 100), energy: clamp(energy + 10, 0, 100) });
+          return finish({
             scrip: clamp(agent.scrip - 10, 0, 500),
-            compute: clamp(agent.compute + 15, 0, 150)
-          }));
-        }
-      } else if (kind === "alliance") {
-        if (key === "A") {
-          updateAgent(firstId, agent => ({ ...agent, reputation: clamp(agent.reputation + 3, 0, 100) }));
-          updateAgent(secondId, agent => ({ ...agent, reputation: clamp(agent.reputation + 3, 0, 100) }));
-        } else if (key === "C") {
-          updateAgent(firstId, agent => ({ ...agent, reputation: clamp(agent.reputation + 1, 0, 100) }));
-          updateAgent(secondId, agent => ({ ...agent, reputation: clamp(agent.reputation + 1, 0, 100) }));
-          updatePlayer(agent => ({ ...agent, reputation: clamp(agent.reputation + 5, 0, 100) }));
-        }
-      } else if (kind === "dividends") {
-        if (key === "A") {
-          next = next.map(agent => ({ ...agent, scrip: clamp(agent.scrip + 8, 0, 500) }));
-        } else if (key === "B") {
-          const topIds = [...next].sort((a, b) => b.scrip - a.scrip).slice(0, 3).map(agent => agent.id);
-          next = next.map(agent => topIds.includes(agent.id) ? { ...agent, scrip: clamp(agent.scrip + 20, 0, 500) } : agent);
-        } else {
-          next = next.map(agent => ({ ...agent, compute: clamp(agent.compute + 5, 0, 150) }));
-        }
-      } else if (kind === "risk") {
-        if (key === "A") {
-          updatePlayer(agent => ({ ...agent, scrip: clamp(agent.scrip + 20, 0, 500) }));
-        } else if (key === "B") {
-          updatePlayer(agent => ({ ...agent, scrip: clamp(agent.scrip + 15, 0, 500) }));
-        } else {
-          const candidates = next.filter(agent => !agent.isPlayer);
-          const target = candidates[Math.floor(Math.random() * candidates.length)] ?? next[0];
-          const reward = 10 + Math.floor(Math.random() * 11);
-          updateAgent(target?.id, agent => ({ ...agent, scrip: clamp(agent.scrip + reward, 0, 500) }));
-        }
-      } else if (kind === "morale") {
-        if (key === "A") {
-          updateAgent(firstId, agent => ({
-            ...agent,
-            compute: clamp(agent.compute + 10, 0, 150),
-            status: "Resting by Governor order",
-            currentMission: "Idle recovery cycle"
-          }));
-          setAgentMotion(cur => {
-            const existing = cur[firstId] ?? next.find(agent => agent.id === firstId);
-            if (!firstId || !existing) return cur;
-            const nextMotion = { ...cur, [firstId]: { x: existing.x, y: existing.y, action: "idle" as const } };
-            agentMotionRef.current = nextMotion;
-            return nextMotion;
+            reputation: clamp(agent.reputation + (agent.reputation >= 40 ? 20 : 5), 0, 100)
           });
-        } else if (key === "B") {
-          updateAgent(firstId, agent => ({ ...agent, reputation: clamp(agent.reputation + 5, 0, 100) }));
         }
-      } else if (kind === "cap") {
-        if (key === "A") {
-          next = next.map(agent => ({ ...agent, scrip: Math.min(agent.scrip, 300) }));
-        } else if (key === "C") {
-          next = next.map(agent => ({ ...agent, scrip: Math.min(agent.scrip, 400) }));
-        }
-      } else if (kind === "cache") {
-        if (key === "A") {
-          updatePlayer(agent => ({ ...agent, scrip: clamp(agent.scrip + 20, 0, 500) }));
-        } else if (key === "B") {
-          next = next.map(agent => ({ ...agent, scrip: clamp(agent.scrip + 8, 0, 500) }));
-        } else {
-          updatePlayer(agent => ({ ...agent, reputation: clamp(agent.reputation + 10, 0, 100) }));
-        }
-      }
 
+        if (kind === "shortage") {
+          if (key === "A") return finish({ scrip: clamp(agent.scrip - 10, 0, 500) });
+          if (key === "B") return finish({ energy: clamp(energy - 15, 0, 100), reputation: clamp(agent.reputation - 5, 0, 100) });
+          return finish({ scrip: clamp(agent.scrip + 15, 0, 500), energy: clamp(energy - 18, 0, 100) });
+        }
+
+        if (kind === "social-inv") {
+          if (key === "A") return finish({ reputation: clamp(agent.reputation + 10, 0, 100), energy: clamp(energy - 10, 0, 100), scrip: clamp(agent.scrip - 5, 0, 500) });
+          if (key === "B") return finish({ reputation: clamp(agent.reputation + 4, 0, 100), energy: clamp(energy - 3, 0, 100) });
+          return finish({ energy: clamp(energy + 8, 0, 100), reputation: clamp(agent.reputation - 5, 0, 100) });
+        }
+
+        return finish({});
+      });
       agentsRef.current = next;
       return next;
     });
@@ -986,8 +1020,13 @@ export default function Home() {
       id: `decision-event-${Date.now()}`,
       time: nowTime(epochRef.current),
       kind: "rule" as const,
-      text: `Player decision: ${option.label}. ${option.effect}`
+      text: autonomous
+        ? `Decision ignored — agent acted autonomously: ${option.label}`
+        : `Player decision: ${option.label}. ${resultText}`
     }, ...cur].slice(0, 12));
+    setDecisionExpiresAt(null);
+    setDecisionSecondsLeft(0);
+    pendingDecisionRef.current = null;
     setPendingDecision(null);
     setDecisionInput("");
   }
@@ -1011,11 +1050,17 @@ export default function Home() {
       kind: "rule" as const,
       text: `Player decision: ${text}. Player agent +3 rep`
     }, ...cur].slice(0, 12));
+    setDecisionExpiresAt(null);
+    setDecisionSecondsLeft(0);
+    pendingDecisionRef.current = null;
     setPendingDecision(null);
     setDecisionInput("");
   }
 
   function skipDecision() {
+    setDecisionExpiresAt(null);
+    setDecisionSecondsLeft(0);
+    pendingDecisionRef.current = null;
     setPendingDecision(null);
     setDecisionInput("");
   }
@@ -1520,7 +1565,10 @@ export default function Home() {
     setPolicyInput("");
     setIssuedPolicies([]);
     setPolicyCooldownUntil(0);
+    pendingDecisionRef.current = null;
     setPendingDecision(null);
+    setDecisionExpiresAt(null);
+    setDecisionSecondsLeft(0);
     setDecisionInput("");
     setDailyPlanInput("");
     setTemporaryPromptInput("");
@@ -1635,6 +1683,17 @@ export default function Home() {
   function GameScreen() {
     const viewAgent = gameMode === "game" ? (playerAgent ?? selectedAgent) : selectedAgent;
     const planLocked = Boolean(playerAgent && playerAgent.dailyPlanDay === epoch);
+    const decisionTimerTone = decisionSecondsLeft <= 10
+      ? "text-blood"
+      : decisionSecondsLeft <= 20
+        ? "text-amberline"
+        : "text-white";
+    const decisionTimerBar = decisionSecondsLeft <= 10
+      ? "bg-blood"
+      : decisionSecondsLeft <= 20
+        ? "bg-amberline"
+        : "bg-cyanline";
+    const decisionProgressWidth = `${clamp((decisionSecondsLeft / 45) * 100, 0, 100)}%`;
 
     return (
       <main className="scanlines min-h-screen bg-void text-slate-100">
@@ -2256,6 +2315,21 @@ export default function Home() {
               <p className="rounded-lg border border-cyanline/25 bg-cyanline/[0.06] p-3 text-sm leading-6 text-slate-100">
                 {pendingDecision.situation}
               </p>
+
+              <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                <div className="flex items-center justify-between gap-3 font-mono text-[10px] uppercase tracking-wider">
+                  <span className={`text-base font-black ${decisionTimerTone}`}>⏱ {decisionSecondsLeft}s</span>
+                  <span className="text-right text-slate-400">
+                    {language === "zh" ? "不作为将由智能体自行决策" : "Agent will act autonomously if ignored"}
+                  </span>
+                </div>
+                <div className="mt-2 h-1 overflow-hidden rounded bg-white/10">
+                  <div
+                    className={`h-full rounded transition-all duration-500 ${decisionTimerBar}`}
+                    style={{ width: decisionProgressWidth }}
+                  />
+                </div>
+              </div>
 
               <div className="mt-4 grid gap-2">
                 {pendingDecision.options.map(option => (
