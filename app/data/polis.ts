@@ -54,6 +54,7 @@ export type Agent = {
   dailyPlan?: string;
   dailyPlanDay?: number;
   planFocus?: "work" | "trade" | "study" | "social" | "rest" | "build";
+  promptTickets?: number;
 };
 
 export type DialogueLine = { speaker: string; text: string };

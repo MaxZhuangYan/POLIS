@@ -198,6 +198,11 @@ const copy = {
     planLocked: "Plan Locked",
     noDailyPlan: "No plan set for this epoch.",
     planFocus: "Focus",
+    tempPrompt: "Temporary Prompt",
+    tempPromptPlaceholder: "Interrupt with one validated action...",
+    executePrompt: "Execute",
+    tickets: "Tickets",
+    validator: "Validator",
     totalAgents: "Agents",
     avgWealth: "Avg Wealth",
     topEarner: "Top Earner",
@@ -266,6 +271,11 @@ const copy = {
     planLocked: "计划已锁定",
     noDailyPlan: "本纪元尚未设定计划。",
     planFocus: "重点",
+    tempPrompt: "临时指令",
+    tempPromptPlaceholder: "用一次校验动作打断当前任务...",
+    executePrompt: "执行",
+    tickets: "票券",
+    validator: "校验器",
     totalAgents: "居民数",
     avgWealth: "平均财富",
     topEarner: "首富",
@@ -317,6 +327,51 @@ function classifyDailyPlan(text: string): PlanFocus {
   return "work";
 }
 
+function validateTemporaryPrompt(agent: Agent, text: string): {
+  ok: boolean;
+  focus: PlanFocus;
+  action: AgentMotion["action"];
+  reason: string;
+  delta: Pick<Agent, "scrip" | "reputation" | "compute">;
+} {
+  const focus = classifyDailyPlan(text);
+  const action = planFocusActions[focus];
+  const tickets = agent.promptTickets ?? 0;
+
+  if (tickets <= 0) {
+    return { ok: false, focus, action, reason: "no_prompt_ticket", delta: { scrip: 0, reputation: 0, compute: 0 } };
+  }
+
+  const costByFocus: Record<PlanFocus, number> = {
+    work: 10,
+    trade: 8,
+    study: 6,
+    social: 4,
+    rest: 0,
+    build: 12
+  };
+  const scripCost = focus === "trade" ? 4 : focus === "study" ? 6 : 0;
+  const computeCost = costByFocus[focus];
+
+  if (agent.compute < computeCost) {
+    return { ok: false, focus, action, reason: "not_enough_compute", delta: { scrip: 0, reputation: 0, compute: 0 } };
+  }
+  if (agent.scrip < scripCost) {
+    return { ok: false, focus, action, reason: "not_enough_scrip", delta: { scrip: 0, reputation: 0, compute: 0 } };
+  }
+
+  const deltaByFocus: Record<PlanFocus, Pick<Agent, "scrip" | "reputation" | "compute">> = {
+    work: { scrip: 10, reputation: 1, compute: -computeCost },
+    trade: { scrip: 12 - scripCost, reputation: 2, compute: -computeCost },
+    study: { scrip: -scripCost, reputation: 4, compute: -computeCost },
+    social: { scrip: 0, reputation: 5, compute: -computeCost },
+    rest: { scrip: -2, reputation: 0, compute: 18 },
+    build: { scrip: 4, reputation: 3, compute: -computeCost }
+  };
+
+  return { ok: true, focus, action, reason: "validated", delta: deltaByFocus[focus] };
+}
+
 function normalizeAgent(a: Agent): Agent {
   return {
     ...a,
@@ -326,6 +381,7 @@ function normalizeAgent(a: Agent): Agent {
     currentMission: a.currentMission ?? a.status,
     mbti: a.mbti ?? "ISTP",
     planFocus: a.planFocus,
+    promptTickets: a.promptTickets ?? (a.isPlayer ? 3 : 1),
   };
 }
 
@@ -362,6 +418,7 @@ export default function Home() {
   const [pendingDecision, setPendingDecision] = useState<DecisionPrompt | null>(null);
   const [decisionInput,  setDecisionInput]  = useState("");
   const [dailyPlanInput, setDailyPlanInput] = useState("");
+  const [temporaryPromptInput, setTemporaryPromptInput] = useState("");
 
   // Creation form state
   const [creationName,   setCreationName]   = useState("");
@@ -416,7 +473,7 @@ export default function Home() {
         agents: Agent[]; events: WorldEvent[]; epoch: number;
         settlement: Settlement; selectedId: string;
         conversations: Conversation[]; marketPrices: Record<string, number>;
-        missionProgress?: Record<string, number>; dailyPlanInput?: string;
+        missionProgress?: Record<string, number>; dailyPlanInput?: string; temporaryPromptInput?: string;
       };
       const normalized = s.agents.map(normalizeAgent);
       const motion = initialMotion(normalized);
@@ -434,6 +491,7 @@ export default function Home() {
         ...s.missionProgress
       });
       if (typeof s.dailyPlanInput === "string") setDailyPlanInput(s.dailyPlanInput);
+      if (typeof s.temporaryPromptInput === "string") setTemporaryPromptInput(s.temporaryPromptInput);
     } catch {
       window.localStorage.removeItem(STORAGE_KEY);
     }
@@ -470,9 +528,9 @@ export default function Home() {
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      agents, events, epoch, settlement, selectedId, conversations, marketPrices, missionProgress, dailyPlanInput
+      agents, events, epoch, settlement, selectedId, conversations, marketPrices, missionProgress, dailyPlanInput, temporaryPromptInput
     }));
-  }, [agents, events, epoch, settlement, selectedId, conversations, marketPrices, missionProgress, dailyPlanInput]);
+  }, [agents, events, epoch, settlement, selectedId, conversations, marketPrices, missionProgress, dailyPlanInput, temporaryPromptInput]);
 
   // ── Speech bubble helpers ─────────────────────────────────────────────────
   const addSpeechBubble = useCallback((agentId: string, text: string) => {
@@ -1150,6 +1208,74 @@ export default function Home() {
     setDailyPlanInput("");
   }
 
+  // ── Temporary prompt ─────────────────────────────────────────────────────
+  function executeTemporaryPrompt() {
+    const text = temporaryPromptInput.trim();
+    if (!text || !playerAgent) return;
+
+    const result = validateTemporaryPrompt(playerAgent, text);
+    const eventText = result.ok
+      ? (language === "zh"
+          ? `${playerAgent.name} 使用 Temporary Prompt：${text}。校验通过，执行 ${result.focus}。`
+          : `${playerAgent.name} used Temporary Prompt: ${text}. Validator passed; executing ${result.focus}.`)
+      : (language === "zh"
+          ? `${playerAgent.name} 的 Temporary Prompt 被拒绝：${result.reason}。`
+          : `${playerAgent.name}'s Temporary Prompt was rejected: ${result.reason}.`);
+
+    if (result.ok) {
+      setAgents(cur => {
+        const next = cur.map(agent => agent.id === playerAgent.id
+          ? {
+              ...agent,
+              promptTickets: Math.max(0, (agent.promptTickets ?? 0) - 1),
+              planFocus: result.focus,
+              currentMission: text.slice(0, 42),
+              status: language === "zh" ? `临时执行：${text.slice(0, 28)}` : `Interrupted: ${text.slice(0, 28)}`,
+              thoughts: language === "zh"
+                ? `临时指令已覆盖当前任务。我会先完成 ${result.focus} 动作。`
+                : `Temporary prompt overrides my current task. I will execute the ${result.focus} action first.`,
+              scrip: clamp(agent.scrip + result.delta.scrip, 0, 500),
+              reputation: clamp(agent.reputation + result.delta.reputation, 0, 100),
+              compute: clamp(agent.compute + result.delta.compute, 0, 150)
+            }
+          : agent
+        );
+        agentsRef.current = next;
+        return next;
+      });
+
+      setAgentMotion(cur => {
+        const next = { ...cur, [playerAgent.id]: { ...(cur[playerAgent.id] ?? { x: playerAgent.x, y: playerAgent.y }), action: result.action } };
+        agentMotionRef.current = next;
+        return next;
+      });
+      addSpeechBubble(playerAgent.id, text);
+      setTemporaryPromptInput("");
+    }
+
+    const lines: DialogueLine[] = [
+      { speaker: t.validator, text: result.ok ? "validated" : result.reason },
+      { speaker: "Temporary Prompt", text }
+    ];
+    if (result.ok) {
+      lines.push({ speaker: playerAgent.name, text: `${result.focus} / scrip ${result.delta.scrip >= 0 ? "+" : ""}${result.delta.scrip}, rep +${result.delta.reputation}, compute ${result.delta.compute >= 0 ? "+" : ""}${result.delta.compute}` });
+    }
+
+    setConversations(cur => [{
+      id: `temp-prompt-${Date.now()}`,
+      time: nowTime(epoch),
+      agentIds: ["player", playerAgent.id] as [string, string],
+      lines,
+      location: "Interrupt Channel"
+    }, ...cur].slice(0, 30));
+    setEvents(cur => [{
+      id: `temp-prompt-${Date.now()}`,
+      time: nowTime(epoch),
+      kind: result.ok ? "contract" as const : "rule" as const,
+      text: eventText
+    }, ...cur].slice(0, 12));
+  }
+
   // ── Player policy system ─────────────────────────────────────────────────
   function issuePolicy() {
     const text = policyInput.trim();
@@ -1247,6 +1373,7 @@ export default function Home() {
       scrip: 80, reputation: 50, compute: 70,
       affinity: {},
       isPlayer: true,
+      promptTickets: 3,
       thoughts: `I just arrived in Polis as a ${info.bestRole}. The city is alive with other agents...`
     };
     setAgents(cur => {
@@ -1284,7 +1411,8 @@ export default function Home() {
       const next = cur.map(agent => ({
         ...agent,
         scrip: clamp(agent.scrip + Math.floor(agent.scrip * 0.1), 0, 500),
-        reputation: agent.isPlayer ? clamp(agent.reputation + 5, 0, 100) : agent.reputation
+        reputation: agent.isPlayer ? clamp(agent.reputation + 5, 0, 100) : agent.reputation,
+        promptTickets: agent.isPlayer ? Math.min(5, (agent.promptTickets ?? 0) + 2) : agent.promptTickets
       }));
       agentsRef.current = next;
       return next;
@@ -1361,6 +1489,7 @@ export default function Home() {
     setPendingDecision(null);
     setDecisionInput("");
     setDailyPlanInput("");
+    setTemporaryPromptInput("");
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1656,6 +1785,48 @@ export default function Home() {
                         className="shrink-0 rounded-lg border border-cyanline/50 bg-cyanline/10 px-3 py-2 font-mono text-[10px] uppercase text-cyanline hover:bg-cyanline/20 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         {t.submitPlan}
+                      </button>
+                    </div>
+                  </div>
+                </Panel>
+              )}
+
+              {/* Temporary Prompt */}
+              {playerAgent && (
+                <Panel title={t.tempPrompt} action={
+                  <span className="rounded bg-violet-400/15 px-2 py-0.5 font-mono text-[10px] uppercase text-violet-200">
+                    {t.tickets}: {playerAgent.promptTickets ?? 0}
+                  </span>
+                }>
+                  <div className="space-y-2">
+                    <div className="rounded border border-violet-300/20 bg-violet-300/[0.05] p-2">
+                      <div className="mb-1 flex items-center justify-between gap-2 font-mono text-[10px] uppercase text-slate-500">
+                        <span>{t.validator}</span>
+                        <span className={(playerAgent.promptTickets ?? 0) > 0 ? "text-cyanline" : "text-blood"}>
+                          {(playerAgent.promptTickets ?? 0) > 0 ? "ready" : "no_ticket"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] leading-4 text-slate-400">
+                        {language === "zh"
+                          ? "即时指令会消耗票券，并校验算力/工票后打断当前任务。"
+                          : "Interrupts the current task after ticket, compute, and scrip validation."}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        className="min-w-0 flex-1 rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 font-mono text-xs text-white placeholder-slate-600 outline-none focus:border-violet-300/50 focus:bg-violet-300/5"
+                        placeholder={t.tempPromptPlaceholder}
+                        value={temporaryPromptInput}
+                        onChange={e => setTemporaryPromptInput(e.target.value)}
+                        onKeyDown={e => e.key === "Enter" && executeTemporaryPrompt()}
+                        disabled={(playerAgent.promptTickets ?? 0) <= 0}
+                      />
+                      <button
+                        onClick={executeTemporaryPrompt}
+                        disabled={!temporaryPromptInput.trim() || (playerAgent.promptTickets ?? 0) <= 0}
+                        className="shrink-0 rounded-lg border border-violet-300/50 bg-violet-300/10 px-3 py-2 font-mono text-[10px] uppercase text-violet-200 hover:bg-violet-300/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {t.executePrompt}
                       </button>
                     </div>
                   </div>
