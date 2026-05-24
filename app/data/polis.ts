@@ -48,6 +48,10 @@ export type Agent = {
   scrip: number;
   reputation: number;
   compute: number;
+  health?: number;
+  energy?: number;
+  satiety?: number;
+  residenceLevel?: number;
   affinity: Record<string, number>;
   isPlayer?: boolean;
   thoughts?: string;

@@ -127,6 +127,15 @@ const ECONOMY_DELTAS: Record<AgentMotion["action"], Pick<Agent, "scrip" | "reput
   walk:  { scrip: 0,  reputation: 0,    compute: 0 }
 };
 
+const survivalDeltas: Record<AgentMotion["action"], Pick<Required<Agent>, "health" | "energy" | "satiety">> = {
+  work:  { health: -1, energy: -8, satiety: -6 },
+  trade: { health:  0, energy: -5, satiety: -4 },
+  talk:  { health:  0, energy: -3, satiety: -2 },
+  sign:  { health: -1, energy: -6, satiety: -4 },
+  walk:  { health:  0, energy: -4, satiety: -3 },
+  idle:  { health:  1, energy:  7, satiety: -1 }
+};
+
 const planFocusActions: Record<PlanFocus, AgentMotion["action"]> = {
   work: "work",
   trade: "trade",
@@ -146,6 +155,10 @@ const copy = {
     scrip: "Scrip",
     reputation: "Rep",
     compute: "Compute",
+    health: "Health",
+    energy: "Energy",
+    satiety: "Satiety",
+    residence: "Residence",
     enterPolis: "Enter Polis",
     createAgent: "Create Your Agent",
     choosePersonality: "Choose Personality",
@@ -219,6 +232,10 @@ const copy = {
     scrip: "工票",
     reputation: "声望",
     compute: "算力",
+    health: "健康",
+    energy: "能量",
+    satiety: "饱腹",
+    residence: "住宅",
     enterPolis: "进入 Polis",
     createAgent: "创建你的智能体",
     choosePersonality: "选择人格类型",
@@ -382,6 +399,10 @@ function normalizeAgent(a: Agent): Agent {
     mbti: a.mbti ?? "ISTP",
     planFocus: a.planFocus,
     promptTickets: a.promptTickets ?? (a.isPlayer ? 3 : 1),
+    health: a.health ?? 88,
+    energy: a.energy ?? clamp(62 + (a.compute ?? 50) * 0.25, 0, 100),
+    satiety: a.satiety ?? clamp(58 + (a.scrip ?? 50) * 0.15, 0, 100),
+    residenceLevel: a.residenceLevel ?? (a.isPlayer ? 1 : Math.max(1, Math.min(3, Math.floor((a.level ?? 1) / 3)))),
   };
 }
 
@@ -558,10 +579,11 @@ export default function Home() {
         const plannedAction = agent.dailyPlanDay === epochRef.current && agent.planFocus
           ? planFocusActions[agent.planFocus]
           : null;
+        const needsRecovery = (agent.energy ?? 100) < 18 || (agent.satiety ?? 100) < 12 || (agent.health ?? 100) < 20;
         latestMotion[agent.id] = {
           x: clamp(m.x + (Math.random() - 0.5) * 5, 10, 86),
           y: clamp(m.y + (Math.random() - 0.5) * 4, 16, 78),
-          action: plannedAction && Math.random() > 0.22 ? plannedAction : actions[Math.floor(Math.random() * actions.length)]
+          action: needsRecovery ? "idle" : plannedAction && Math.random() > 0.22 ? plannedAction : actions[Math.floor(Math.random() * actions.length)]
         };
       });
       agentMotionRef.current = latestMotion;
@@ -602,13 +624,17 @@ export default function Home() {
         const next = prev.map(agent => {
           const action = agentMotionRef.current[agent.id]?.action ?? "idle";
           const delta = ECONOMY_DELTAS[action];
+          const survival = survivalDeltas[action];
           const gain = (value: number) => value > 0 && agent.isPlayer ? Math.ceil(value * 1.2) : value;
 
           return {
             ...agent,
             scrip: clamp(agent.scrip + gain(delta.scrip), 0, 500),
             reputation: clamp(agent.reputation + gain(delta.reputation), 0, 100),
-            compute: clamp(agent.compute + gain(delta.compute), 0, 150)
+            compute: clamp(agent.compute + gain(delta.compute), 0, 150),
+            health: clamp((agent.health ?? 88) + survival.health, 0, 100),
+            energy: clamp((agent.energy ?? 80) + survival.energy, 0, 100),
+            satiety: clamp((agent.satiety ?? 75) + survival.satiety, 0, 100)
           };
         }).map(agent => {
           if (completedMissions.length === 0 || !agent.isPlayer) return agent;
@@ -1236,7 +1262,10 @@ export default function Home() {
                 : `Temporary prompt overrides my current task. I will execute the ${result.focus} action first.`,
               scrip: clamp(agent.scrip + result.delta.scrip, 0, 500),
               reputation: clamp(agent.reputation + result.delta.reputation, 0, 100),
-              compute: clamp(agent.compute + result.delta.compute, 0, 150)
+              compute: clamp(agent.compute + result.delta.compute, 0, 150),
+              health: clamp((agent.health ?? 88) + (result.focus === "rest" ? 8 : -1), 0, 100),
+              energy: clamp((agent.energy ?? 80) + (result.focus === "rest" ? 22 : -6), 0, 100),
+              satiety: clamp((agent.satiety ?? 75) + (result.focus === "rest" ? 10 : -4), 0, 100)
             }
           : agent
         );
@@ -1371,6 +1400,7 @@ export default function Home() {
       status: "Just arrived in Polis",
       intent: "Explore the world and find a place in the contract economy",
       scrip: 80, reputation: 50, compute: 70,
+      health: 92, energy: 78, satiety: 72, residenceLevel: 1,
       affinity: {},
       isPlayer: true,
       promptTickets: 3,
@@ -1412,7 +1442,10 @@ export default function Home() {
         ...agent,
         scrip: clamp(agent.scrip + Math.floor(agent.scrip * 0.1), 0, 500),
         reputation: agent.isPlayer ? clamp(agent.reputation + 5, 0, 100) : agent.reputation,
-        promptTickets: agent.isPlayer ? Math.min(5, (agent.promptTickets ?? 0) + 2) : agent.promptTickets
+        promptTickets: agent.isPlayer ? Math.min(5, (agent.promptTickets ?? 0) + 2) : agent.promptTickets,
+        health: clamp((agent.health ?? 88) + 4, 0, 100),
+        energy: clamp((agent.energy ?? 80) + 10 + (agent.residenceLevel ?? 1) * 3, 0, 100),
+        satiety: clamp((agent.satiety ?? 75) + 6, 0, 100)
       }));
       agentsRef.current = next;
       return next;
@@ -1446,6 +1479,7 @@ export default function Home() {
       x: Math.floor(14 + Math.random() * 72), y: Math.floor(16 + Math.random() * 68),
       status: "Newly instantiated", intent: "Observe norms, find first contract",
       scrip: 60, reputation: 45, compute: 80,
+      health: 88, energy: 76, satiety: 68, residenceLevel: 1,
       affinity: { [selectedId]: 5 }
     };
     setAgents(cur => {
@@ -1715,6 +1749,9 @@ export default function Home() {
                       {viewAgent.mbti && (
                         <span className="mt-1 inline-block rounded border border-cyanline/30 bg-cyanline/5 px-2 py-0.5 font-mono text-[10px] text-cyanline">{viewAgent.mbti} · {mbtiDescriptions[viewAgent.mbti]?.label}</span>
                       )}
+                      <span className="ml-1 mt-1 inline-block rounded border border-white/10 bg-white/[0.04] px-2 py-0.5 font-mono text-[10px] text-slate-300">
+                        {t.residence} Lv{viewAgent.residenceLevel ?? 1}
+                      </span>
                     </div>
                   </div>
 
@@ -2309,6 +2346,11 @@ function Bars({ agent }: { agent: Agent }) {
       <StatusBar label="Scrip"  value={agent.scrip}      max={200} color="#ffca63" />
       <StatusBar label="Rep"    value={agent.reputation}  max={100} color="#79ffbf" />
       <StatusBar label="CPU"    value={agent.compute}     max={120} color="#45f6ff" />
+      <div className="grid grid-cols-3 gap-2 pt-1">
+        <StatusBar label="HP"     value={agent.health ?? 0}  max={100} color="#ff5c7a" />
+        <StatusBar label="Energy" value={agent.energy ?? 0}  max={100} color="#a78bfa" />
+        <StatusBar label="Food"   value={agent.satiety ?? 0} max={100} color="#79ffbf" />
+      </div>
     </div>
   );
 }
