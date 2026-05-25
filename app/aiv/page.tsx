@@ -377,7 +377,7 @@ export default function AivPage() {
             style={{ left: `${lft}%`, top: `${tp}%`, position: "absolute", transform: "translate(-50%,-50%)", zIndex: 3 }}
           >
             <Image
-              src={`/assets/aiv/${isApple ? "tree-apple" : "tree-regular"}.svg`}
+              src={`/assets/aiv/${isApple ? "tree-apple" : "tree-regular"}.png`}
               alt="tree"
               width={44}
               height={58}
@@ -391,7 +391,7 @@ export default function AivPage() {
         {BUILDINGS.map(b => (
           <div key={b.id} className={styles.building} style={{ left: b.left, top: b.top }}>
             <Image
-              src={`/assets/aiv/building-${b.id}.svg`}
+              src={`/assets/aiv/building-${b.id}.png`}
               alt={b.label}
               width={90}
               height={90}
@@ -424,7 +424,7 @@ export default function AivPage() {
               onClick={() => setSelectedId(agent.id)}
             >
               <Image
-                src={`/assets/aiv/npc-${isPlayer ? "player" : agent.role.toLowerCase()}.svg`}
+                src={`/assets/aiv/npc-${isPlayer ? "player" : agent.role.toLowerCase()}.png`}
                 alt={agent.name}
                 width={30}
                 height={48}
