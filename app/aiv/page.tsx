@@ -39,7 +39,15 @@ const TREES: [number, number, boolean][] = [
   [91, 20, false], [89, 58, true],  [62, 12, false], [8, 44, true],
 ];
 
-const TOOLS = ["⌂", "📋", "👥", "🧠", "?"];
+const UI_ICON_PATH = "/assets/aiv/ui";
+
+const TOOLS = [
+  { icon: "home", title: "Home" },
+  { icon: "diary", title: "Diary" },
+  { icon: "relations", title: "Relations" },
+  { icon: "thoughts", title: "Thoughts" },
+  { icon: "help", title: "Help" },
+] as const;
 
 const EVENT_COLORS: Record<string, string> = {
   contract: "#ff9a18", social: "#c7ff7e", rule: "#45f6ff",
@@ -75,6 +83,20 @@ function normalizeAgent(a: Agent): Agent {
 }
 
 function agentWealth(a: Agent) { return a.scrip + a.reputation * 2 + Math.round(a.compute * 0.5); }
+
+function UiIcon({ name, size = 22, className = "" }: { name: string; size?: number; className?: string }) {
+  return (
+    <Image
+      src={`${UI_ICON_PATH}/icon-${name}.png`}
+      alt=""
+      width={size}
+      height={size}
+      className={className}
+      style={{ imageRendering: "pixelated" }}
+      unoptimized
+    />
+  );
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -282,11 +304,11 @@ export default function AivPage() {
   const leaderboard   = [...agents].sort((a, b) => agentWealth(b) - agentWealth(a));
 
   const marketPrices = [
-    { emoji: "🍎", price: +(12  + epoch * 0.28).toFixed(2) },
-    { emoji: "🪵", price: +(18  + epoch * 0.52).toFixed(2) },
-    { emoji: "🧱", price: +(24  + epoch * 0.68).toFixed(2) },
-    { emoji: "📦", price: +(31  + epoch * 0.44).toFixed(2) },
-    { emoji: "⚡", price: +(45  + epoch * 1.18).toFixed(2) },
+    { icon: "apple", price: +(12  + epoch * 0.28).toFixed(2) },
+    { icon: "wood-resource", price: +(18  + epoch * 0.52).toFixed(2) },
+    { icon: "brick", price: +(24  + epoch * 0.68).toFixed(2) },
+    { icon: "crate-resource", price: +(31  + epoch * 0.44).toFixed(2) },
+    { icon: "energy-resource", price: +(45  + epoch * 1.18).toFixed(2) },
   ];
 
   // ── Player chat ───────────────────────────────────────────────────────────
@@ -454,12 +476,12 @@ export default function AivPage() {
             <span className={styles.nameLevel}>Lv{displayAgent.level}</span>
           </div>
           {([
-            { icon: "♥", val: displayAgent.health  ?? 88, max: 100, color: "#7cff5d" },
-            { icon: "⚡", val: displayAgent.energy  ?? 80, max: 100, color: "#ffb13a" },
-            { icon: "●", val: displayAgent.satiety ?? 75, max: 100, color: "#8bd6ff" },
+            { icon: "health", val: displayAgent.health  ?? 88, max: 100, color: "#7cff5d" },
+            { icon: "energy", val: displayAgent.energy  ?? 80, max: 100, color: "#ffb13a" },
+            { icon: "satiety", val: displayAgent.satiety ?? 75, max: 100, color: "#8bd6ff" },
           ] as const).map(stat => (
             <div key={stat.icon} className={styles.statLine}>
-              <span className={styles.statIcon}>{stat.icon}</span>
+              <span className={styles.statIcon}><UiIcon name={stat.icon} size={18} /></span>
               <div className={styles.statBar}>
                 <div
                   className={styles.statFill}
@@ -470,8 +492,8 @@ export default function AivPage() {
             </div>
           ))}
           <div className={styles.wallet}>
-            <span>◎ {displayAgent.scrip}</span>
-            <span>▰ {displayAgent.compute}</span>
+            <span><UiIcon name="scrip" size={16} /> {displayAgent.scrip}</span>
+            <span><UiIcon name="compute" size={16} /> {displayAgent.compute}</span>
           </div>
         </div>
       </div>
@@ -482,19 +504,23 @@ export default function AivPage() {
           className={`${styles.modePill}${gameMode === "data" ? ` ${styles.modePillData}` : ""}`}
           onClick={() => setGameMode(m => m === "game" ? "data" : "game")}
         >
-          <div className={styles.modeIcon}>{gameMode === "game" ? "🎮" : "📊"}</div>
+          <div className={styles.modeIcon}>
+            <UiIcon name={gameMode === "game" ? "game" : "data"} size={26} />
+          </div>
           <div>{gameMode === "game" ? "GAME" : "DATA"}</div>
         </div>
         <div className={styles.modeControls}>
-          <button className={styles.ctrlBtn} title="Settle epoch" onClick={settleEpoch}>⟳</button>
+          <button className={styles.ctrlBtn} title="Settle epoch" onClick={settleEpoch}>
+            <UiIcon name="refresh" size={18} />
+          </button>
           <button className={styles.ctrlBtn} title="Pause / Run" onClick={() => setIsRunning(r => !r)}>
-            {isRunning ? "⏸" : "▶"}
+            <UiIcon name={isRunning ? "pause" : "play"} size={18} />
           </button>
           <button className={styles.ctrlBtn} title="Toggle language" onClick={() => {
             setLanguage(l => l === "en" ? "zh" : "en");
             localStorage.setItem(LANGUAGE_KEY, language === "en" ? "zh" : "en");
           }}>
-            {language === "en" ? "中" : "EN"}
+            <UiIcon name="language" size={18} />
           </button>
         </div>
       </div>
@@ -504,7 +530,7 @@ export default function AivPage() {
         <div className={styles.actionHud}>
           <div className={styles.actionTitle}>
             <span>{(agentMotion[playerAgent.id]?.action ?? "idle").toUpperCase()}</span>
-            <span>🎟 ×{playerAgent.promptTickets ?? 0}</span>
+            <span className={styles.ticketInline}><UiIcon name="ticket" size={18} /> ×{playerAgent.promptTickets ?? 0}</span>
           </div>
           <div className={styles.progressBar}>
             <span className={styles.progressFill} style={{ width: `${playerAgent.energy ?? 80}%` }} />
@@ -523,15 +549,15 @@ export default function AivPage() {
       {/* ── Right toolbar ── */}
       <div className={styles.rightToolbar}>
         <div className={styles.lvBadge}>Lv{displayAgent.level}</div>
-        {TOOLS.map((icon, i) => (
+        {TOOLS.map((tool, i) => (
           <div key={i} className={styles.toolRow}>
             <div className={styles.toolDots} />
             <button
               className={`${styles.tool}${activeTool === i ? ` ${styles.toolActive}` : ""}`}
               onClick={() => setActiveTool(prev => prev === i ? null : i)}
-              title={["Home", "Diary", "Relations", "Thoughts", "Help"][i]}
+              title={tool.title}
             >
-              {icon}
+              <UiIcon name={tool.icon} size={30} />
             </button>
           </div>
         ))}
@@ -540,11 +566,12 @@ export default function AivPage() {
       {/* ── Tool panel (floats left of toolbar) ── */}
       {activeTool !== null && (
         <div className={styles.toolPanel}>
-          {/* ⌂ Home / Stats */}
+          {/* Home / Stats */}
           {activeTool === 0 && (
             <>
               <div className={styles.toolPanelTitle}>
-                {language === "zh" ? "⌂ 我的状态" : "⌂ Home Stats"}
+                <UiIcon name="home" size={18} />
+                <span>{language === "zh" ? "我的状态" : "Home Stats"}</span>
               </div>
               {([
                 { label: language === "zh" ? "贡献券" : "Scrip",    val: displayAgent.scrip,         max: 200,  color: "#ffca63" },
@@ -578,11 +605,12 @@ export default function AivPage() {
             </>
           )}
 
-          {/* 📋 Diary / Conversations */}
+          {/* Diary / Conversations */}
           {activeTool === 1 && (
             <>
               <div className={styles.toolPanelTitle}>
-                {language === "zh" ? "📋 最近对话" : "📋 Diary"}
+                <UiIcon name="diary" size={18} />
+                <span>{language === "zh" ? "最近对话" : "Diary"}</span>
               </div>
               {conversations.length === 0 && (
                 <p style={{ color: "#888", fontSize: 11 }}>
@@ -599,11 +627,12 @@ export default function AivPage() {
             </>
           )}
 
-          {/* 👥 Relations */}
+          {/* Relations */}
           {activeTool === 2 && (
             <>
               <div className={styles.toolPanelTitle}>
-                {language === "zh" ? "👥 关系网络" : "👥 Relations"}
+                <UiIcon name="relations" size={18} />
+                <span>{language === "zh" ? "关系网络" : "Relations"}</span>
               </div>
               {Object.entries(displayAgent.affinity).length === 0 && (
                 <p style={{ color: "#888", fontSize: 11 }}>
@@ -633,11 +662,12 @@ export default function AivPage() {
             </>
           )}
 
-          {/* 🧠 Thoughts */}
+          {/* Thoughts */}
           {activeTool === 3 && (
             <>
               <div className={styles.toolPanelTitle}>
-                {language === "zh" ? "🧠 当前想法" : "🧠 Thoughts"}
+                <UiIcon name="thoughts" size={18} />
+                <span>{language === "zh" ? "当前想法" : "Thoughts"}</span>
               </div>
               <div className={styles.toolPanelConv}>
                 <div className={styles.toolPanelConvName}>{language === "zh" ? "任务" : "Mission"}</div>
@@ -662,30 +692,31 @@ export default function AivPage() {
             </>
           )}
 
-          {/* ? Help */}
+          {/* Help */}
           {activeTool === 4 && (
             <>
               <div className={styles.toolPanelTitle}>
-                {language === "zh" ? "? 操作说明" : "? Help"}
+                <UiIcon name="help" size={18} />
+                <span>{language === "zh" ? "操作说明" : "Help"}</span>
               </div>
               <div className={styles.toolPanelHelp}>
                 {language === "zh" ? (
                   <>
-                    <b>⌂ 点击建筑</b>预填今日计划输入框，发送给你的角色。
-                    <b>🎟 Prompt 票券</b>有票时发送消息会优先消耗票券，产生更强效果。
-                    <b>⟳ 纪元结算</b>触发经济结算，回复能量，增加票券。
-                    <b>📊 Data Mode</b>切换观察模式，查看排名、价格和关系。
+                    <b>点击建筑</b>预填今日计划输入框，发送给你的角色。
+                    <b>Prompt 票券</b>有票时发送消息会优先消耗票券，产生更强效果。
+                    <b>纪元结算</b>触发经济结算，回复能量，增加票券。
+                    <b>Data Mode</b>切换观察模式，查看排名、价格和关系。
                     <b>点击 NPC</b>选中角色，查看其详细状态。
-                    <b>← POLIS</b>返回原版赛博朋克 UI。
+                    <b>POLIS</b>返回原版赛博朋克 UI。
                   </>
                 ) : (
                   <>
-                    <b>⌂ Click a building</b> to prefill the chat with a daily plan prompt.
-                    <b>🎟 Prompt Tickets</b> are consumed when you send with tickets, giving stronger effects.
-                    <b>⟳ Settle Epoch</b> triggers economic settlement, restores energy, adds tickets.
-                    <b>📊 Data Mode</b> shows rankings, prices, and agent relationships.
+                    <b>Click a building</b> to prefill the chat with a daily plan prompt.
+                    <b>Prompt Tickets</b> are consumed when you send with tickets, giving stronger effects.
+                    <b>Settle Epoch</b> triggers economic settlement, restores energy, adds tickets.
+                    <b>Data Mode</b> shows rankings, prices, and agent relationships.
                     <b>Click an NPC</b> to select and inspect that agent.
-                    <b>← POLIS</b> returns to the cyberpunk UI.
+                    <b>POLIS</b> returns to the cyberpunk UI.
                   </>
                 )}
               </div>
@@ -708,7 +739,9 @@ export default function AivPage() {
 
       {/* ── Bottom chat ── */}
       <div className={styles.bottomChat}>
-        <div className={styles.chatMenu}>⌨</div>
+        <div className={styles.chatMenu}>
+          <UiIcon name="keyboard" size={21} />
+        </div>
         <input
           className={styles.chatInputEl}
           placeholder={
@@ -725,7 +758,7 @@ export default function AivPage() {
         />
         {playerAgent && (playerAgent.promptTickets ?? 0) > 0 && (
           <div className={styles.ticketWrap}>
-            🎟️
+            <UiIcon name="ticket" size={34} />
             <span className={styles.ticketNum}>{playerAgent.promptTickets}</span>
           </div>
         )}
@@ -740,13 +773,18 @@ export default function AivPage() {
 
       {/* ── Mini-map ── */}
       <div className={styles.minimap}>
-        <div className={styles.mapPaper} />
-        <div className={styles.mapPin}>📍</div>
+        <div className={styles.mapPaper}>
+          <UiIcon name="minimap" size={58} />
+        </div>
+        <div className={styles.mapPin}>
+          <UiIcon name="pin" size={38} />
+        </div>
       </div>
 
       {/* ── Back to Polis link ── */}
       <Link href="/" className={styles.backLink}>
-        ←<br />POLIS
+        <UiIcon name="back" size={18} />
+        <span>POLIS</span>
       </Link>
 
       {/* ── Data mode overlay ── */}
@@ -801,7 +839,7 @@ export default function AivPage() {
                     {agent.role} · {(agentMotion[agent.id]?.action ?? "idle").toUpperCase()}
                   </span>
                   <span className={styles.rankSub}>
-                    ◎{agent.scrip} ▰{agent.compute} ♥{agent.health ?? 88}
+                    S {agent.scrip} · C {agent.compute} · HP {agent.health ?? 88}
                   </span>
                 </div>
               </div>
@@ -815,8 +853,8 @@ export default function AivPage() {
             </div>
             {marketPrices.map((p, i) => (
               <div key={i} className={styles.priceRow}>
-                <span>{p.emoji}</span>
-                <span className={styles.priceVal}>{p.price} ◎</span>
+                <span><UiIcon name={p.icon} size={24} /></span>
+                <span className={styles.priceVal}>{p.price} S</span>
               </div>
             ))}
           </div>
