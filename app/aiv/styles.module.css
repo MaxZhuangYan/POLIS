@@ -325,6 +325,60 @@
   text-align: right; margin-top: 2px;
 }
 
+/* ── LLM status ──────────────────────────────────────────────────────────── */
+.llmHud {
+  position: absolute;
+  left: 57%;
+  top: 88px;
+  z-index: 90;
+  width: 238px;
+  background: rgba(0,0,0,.72);
+  border-left: 4px solid #ff5c7a;
+  border-radius: 3px;
+  padding: 7px 10px 8px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.28);
+  font-family: "Courier New", monospace;
+}
+.llmHudConnected { border-left-color: #69ff2d; }
+.llmHudTop {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  font-weight: 900;
+  color: white;
+}
+.llmHudTop span:last-child {
+  margin-left: auto;
+  color: #ffec8a;
+}
+.llmDot {
+  width: 8px;
+  height: 8px;
+  background: #ff5c7a;
+  box-shadow: 0 0 8px #ff5c7a;
+}
+.llmHudConnected .llmDot {
+  background: #69ff2d;
+  box-shadow: 0 0 8px #69ff2d;
+}
+.llmHudLine {
+  margin-top: 4px;
+  color: rgba(255,255,255,.72);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.llmHudError {
+  margin-top: 4px;
+  color: #ff9a9a;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Day HUD (top-right) ─────────────────────────────────────────────────── */
 .dayHud {
   position: absolute;

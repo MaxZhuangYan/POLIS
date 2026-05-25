@@ -9,9 +9,27 @@ type Body = {
   epoch: number;
   lang?: "en" | "zh";
   endpoint?: string;
+  model?: string;
 };
 
 const LMSTUDIO_MODEL = process.env.LMSTUDIO_MODEL ?? "gemma-4-4b";
+
+function modelEndpoint(url: string) {
+  return url.replace(/\/chat\/completions\/?$/, "/models");
+}
+
+async function resolveLmModel(url: string, preferred?: string) {
+  const explicit = preferred ?? process.env.LMSTUDIO_MODEL;
+  if (explicit) return explicit;
+  try {
+    const response = await fetch(modelEndpoint(url), { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) return LMSTUDIO_MODEL;
+    const data = (await response.json()) as { data?: Array<{ id?: string }> };
+    return data.data?.[0]?.id ?? LMSTUDIO_MODEL;
+  } catch {
+    return LMSTUDIO_MODEL;
+  }
+}
 
 export async function POST(request: Request) {
   let body: Body;
@@ -27,6 +45,7 @@ export async function POST(request: Request) {
 
   const fallback = fallbackDialogue(body.agentA, body.agentB, body.location);
   const url = body.endpoint ?? process.env.LMSTUDIO_URL ?? "http://127.0.0.1:1234/v1/chat/completions";
+  const model = await resolveLmModel(url, body.model);
   const langInstruction = body.lang === "zh"
     ? "Write entirely in Chinese (简体中文)."
     : "Write entirely in English.";
@@ -37,7 +56,7 @@ export async function POST(request: Request) {
       headers: { "Content-Type": "application/json" },
       signal: AbortSignal.timeout(30000),
       body: JSON.stringify({
-        model: LMSTUDIO_MODEL,
+        model,
         temperature: 0.82,
         max_tokens: 500,
         messages: [
@@ -77,8 +96,14 @@ export async function POST(request: Request) {
 
     if (lines.length < 1) throw new Error("parse failed");
 
-    return NextResponse.json({ lines, affinityDelta: 1, source: "lmstudio" });
-  } catch {
-    return NextResponse.json({ ...fallback, source: "mock" });
+    return NextResponse.json({ lines, affinityDelta: 1, source: "lmstudio", model, endpoint: url });
+  } catch (err) {
+    return NextResponse.json({
+      ...fallback,
+      source: "mock",
+      model,
+      endpoint: url,
+      error: err instanceof Error ? err.message : String(err)
+    });
   }
 }

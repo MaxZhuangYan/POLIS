@@ -13,6 +13,23 @@ import styles from "./styles.module.css";
 type Action = "idle" | "walk" | "talk" | "work" | "sign" | "trade";
 type Motion = { x: number; y: number; action: Action };
 type Bubble = { agentId: string; text: string; expiresAt: number };
+type LlmSource = "lmstudio" | "mock";
+type LlmStatus = {
+  connected: boolean;
+  source: LlmSource;
+  endpoint: string;
+  model: string;
+  lastError: string;
+  lastReplySource: LlmSource;
+};
+type AgentThoughtLog = {
+  id: string;
+  time: string;
+  agentName: string;
+  action: Action;
+  reason: string;
+  source: LlmSource;
+};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -122,6 +139,15 @@ export default function AivPage() {
   const [activeBldg,   setActiveBldg]   = useState<string | null>(null);
   const [activeTool,   setActiveTool]   = useState<number | null>(null);
   const [dataTab,      setDataTab]      = useState<"rank" | "agent">("rank");
+  const [llmStatus,    setLlmStatus]    = useState<LlmStatus>({
+    connected: false,
+    source: "mock",
+    endpoint: "http://127.0.0.1:1234/v1/chat/completions",
+    model: "gemma-4-4b",
+    lastError: "not checked",
+    lastReplySource: "mock",
+  });
+  const [agentThoughtLog, setAgentThoughtLog] = useState<AgentThoughtLog[]>([]);
 
   const agentsRef       = useRef(agents);
   const epochRef        = useRef(epoch);
@@ -131,6 +157,8 @@ export default function AivPage() {
   const isRunningRef    = useRef(isRunning);
   const lmModeRef       = useRef(lmMode);
   const lanIpRef        = useRef(lanIp);
+  const lmModelRef      = useRef("gemma-4-4b");
+  const decisionOverrideRef = useRef<Record<string, { action: Action; until: number }>>({});
 
   useEffect(() => { agentsRef.current    = agents;       }, [agents]);
   useEffect(() => { epochRef.current     = epoch;        }, [epoch]);
@@ -140,6 +168,24 @@ export default function AivPage() {
   useEffect(() => { isRunningRef.current = isRunning;    }, [isRunning]);
   useEffect(() => { lmModeRef.current    = lmMode;       }, [lmMode]);
   useEffect(() => { lanIpRef.current     = lanIp;        }, [lanIp]);
+  useEffect(() => { lmModelRef.current   = llmStatus.model; }, [llmStatus.model]);
+
+  function activeLmEndpoint(mode = lmModeRef.current, ip = lanIpRef.current) {
+    return mode === "local"
+      ? "http://127.0.0.1:1234/v1/chat/completions"
+      : `http://${ip}:1234/v1/chat/completions`;
+  }
+
+  function updateLlmStatus(source: LlmSource, patch: Partial<LlmStatus> = {}) {
+    setLlmStatus(cur => ({
+      ...cur,
+      ...patch,
+      source,
+      connected: source === "lmstudio",
+      lastReplySource: source,
+      lastError: source === "lmstudio" ? "" : (patch.lastError ?? cur.lastError),
+    }));
+  }
 
   // ── Load from localStorage ────────────────────────────────────────────────
   useEffect(() => {
@@ -195,6 +241,48 @@ export default function AivPage() {
     return () => clearInterval(id);
   }, []);
 
+  // ── LM Studio status ─────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const endpoint = activeLmEndpoint(lmModeRef.current, lanIpRef.current);
+      try {
+        const resp = await fetch(`/api/lm-status?endpoint=${encodeURIComponent(endpoint)}`);
+        const data = await resp.json() as {
+          connected?: boolean;
+          source?: LlmSource;
+          endpoint?: string;
+          model?: string;
+          error?: string;
+        };
+        if (cancelled) return;
+        setLlmStatus(cur => ({
+          ...cur,
+          connected: Boolean(data.connected),
+          source: data.source === "lmstudio" ? "lmstudio" : "mock",
+          endpoint: data.endpoint ?? endpoint,
+          model: data.model ?? "gemma-4-4b",
+          lastError: data.connected ? "" : (data.error ?? "LM Studio unavailable"),
+        }));
+      } catch (err) {
+        if (cancelled) return;
+        setLlmStatus(cur => ({
+          ...cur,
+          connected: false,
+          source: "mock",
+          endpoint,
+          lastError: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    };
+    void check();
+    const id = setInterval(check, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [lmMode, lanIp]);
+
   // ── Speech bubble helper ──────────────────────────────────────────────────
   function addBubble(agentId: string, text: string) {
     const exp = Date.now() + 5200;
@@ -215,7 +303,10 @@ export default function AivPage() {
 
       const newMotion = { ...motionRef.current };
       const newAgents = agts.map(agent => {
-        const action = agent.isPlayer || agent.id === pid
+        const override = decisionOverrideRef.current[agent.id];
+        const action = override && override.until > Date.now()
+          ? override.action
+          : agent.isPlayer || agent.id === pid
           ? (motionRef.current[agent.id]?.action ?? "walk")
           : weightedAction();
 
@@ -275,25 +366,122 @@ export default function AivPage() {
       setConversations(cur => [conv, ...cur].slice(0, 30));
 
       // Also try LLM
-      const endpoint = lmModeRef.current === "local"
-        ? "http://127.0.0.1:1234/v1/chat/completions"
-        : `http://${lanIpRef.current}/v1/chat/completions`;
+      const endpoint = activeLmEndpoint();
 
       void fetch("/api/agent-dialogue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentA, agentB, location: "Town", epoch: ep, lang: languageRef.current, endpoint }),
+        body: JSON.stringify({ agentA, agentB, location: "Town", epoch: ep, lang: languageRef.current, endpoint, model: lmModelRef.current }),
       }).then(async r => {
         if (!r.ok) return;
-        const data = await r.json() as { lines?: Array<{ speaker: string; text: string }> };
+        const data = await r.json() as {
+          lines?: Array<{ speaker: string; text: string }>;
+          source?: LlmSource;
+          model?: string;
+          endpoint?: string;
+          error?: string;
+        };
+        const source = data.source === "lmstudio" ? "lmstudio" : "mock";
+        updateLlmStatus(source, {
+          endpoint: data.endpoint ?? endpoint,
+          model: data.model ?? lmModelRef.current,
+          lastError: data.error ?? "",
+        });
         if (data.lines?.length) {
           data.lines.forEach((line, li) => {
             const target = line.speaker === agentA.name ? agentA : agentB;
             setTimeout(() => addBubble(target.id, line.text), li * 2200);
           });
+          setConversations(cur => [{
+            id: `aiv-llm-${Date.now()}`,
+            time: nowTime(ep),
+            agentIds: [agentA.id, agentB.id] as [string, string],
+            lines: data.lines!.map(line => ({
+              speaker: line.speaker,
+              text: `${source === "lmstudio" ? "LLM reply" : "Fallback reply"}: ${line.text}`
+            })),
+            location: "Town",
+          }, ...cur].slice(0, 30));
         }
-      }).catch(() => {});
+      }).catch(err => {
+        updateLlmStatus("mock", {
+          endpoint,
+          lastError: err instanceof Error ? err.message : String(err),
+        });
+      });
     }, 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── LLM autonomous think loop ────────────────────────────────────────────
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!isRunningRef.current) return;
+      const pool = [...agentsRef.current].sort(() => Math.random() - 0.5).slice(0, 2);
+      const endpoint = activeLmEndpoint();
+      pool.forEach(agent => {
+        void fetch("/api/agent-think", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agent,
+            worldContext: `Epoch ${epochRef.current}. Town is running. Agent motion: ${motionRef.current[agent.id]?.action ?? "idle"}.`,
+            epoch: epochRef.current,
+            lang: languageRef.current,
+            endpoint,
+            model: lmModelRef.current,
+          }),
+        })
+          .then(async resp => {
+            const data = await resp.json() as {
+              action?: Action;
+              reason?: string;
+              thought?: string;
+              status?: string;
+              source?: LlmSource;
+              model?: string;
+              endpoint?: string;
+              error?: string;
+            };
+            const action = data.action && ACTIONS.includes(data.action) ? data.action : "idle";
+            const source: LlmSource = data.source === "lmstudio" ? "lmstudio" : "mock";
+            decisionOverrideRef.current[agent.id] = { action, until: Date.now() + 9000 };
+            setAgentMotion(cur => {
+              const current = cur[agent.id] ?? { x: agent.x, y: agent.y, action: "idle" as Action };
+              const next = { ...cur, [agent.id]: { ...current, action } };
+              motionRef.current = next;
+              return next;
+            });
+            setAgents(cur => {
+              const next = cur.map(a => a.id === agent.id
+                ? { ...a, status: data.status || a.status, thoughts: data.thought || a.thoughts }
+                : a
+              );
+              agentsRef.current = next;
+              return next;
+            });
+            setAgentThoughtLog(cur => [{
+              id: `think-${Date.now()}-${agent.id}`,
+              time: nowTime(epochRef.current),
+              agentName: agent.name,
+              action,
+              reason: data.reason || (source === "lmstudio" ? "LLM decision returned." : "Fallback rule selected action."),
+              source,
+            }, ...cur].slice(0, 12));
+            updateLlmStatus(source, {
+              endpoint: data.endpoint ?? endpoint,
+              model: data.model ?? lmModelRef.current,
+              lastError: data.error ?? "",
+            });
+          })
+          .catch(err => {
+            updateLlmStatus("mock", {
+              endpoint,
+              lastError: err instanceof Error ? err.message : String(err),
+            });
+          });
+      });
+    }, 14000);
     return () => clearInterval(id);
   }, []);
 
@@ -320,27 +508,47 @@ export default function AivPage() {
 
     const fallback = fallbackChatReply(playerAgent, msg);
     let reply = fallback.reply;
+    let replySource: LlmSource = "mock";
+    let replyError = "";
+    let replyModel = llmStatus.model;
+    let replyEndpoint = activeLmEndpoint();
     try {
-      const endpoint = lmMode === "local"
-        ? "http://127.0.0.1:1234/v1/chat/completions"
-        : `http://${lanIp}/v1/chat/completions`;
+      const endpoint = activeLmEndpoint(lmMode, lanIp);
       const resp = await fetch("/api/agent-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent: playerAgent, playerMessage: msg, worldContext: `Epoch ${epoch}`, epoch, lang: language, endpoint }),
+        body: JSON.stringify({ agent: playerAgent, playerMessage: msg, worldContext: `Epoch ${epoch}`, epoch, lang: language, endpoint, model: llmStatus.model }),
       });
       if (resp.ok) {
-        const data = await resp.json() as { reply: string };
+        const data = await resp.json() as {
+          reply: string;
+          source?: LlmSource;
+          model?: string;
+          endpoint?: string;
+          error?: string;
+        };
         if (data.reply) reply = data.reply;
+        replySource = data.source === "lmstudio" ? "lmstudio" : "mock";
+        replyError = data.error ?? "";
+        replyModel = data.model ?? replyModel;
+        replyEndpoint = data.endpoint ?? endpoint;
       }
-    } catch {}
+    } catch (err) {
+      replyError = err instanceof Error ? err.message : String(err);
+    }
 
-    addBubble(playerAgent.id, reply.slice(0, 60));
+    updateLlmStatus(replySource, {
+      endpoint: replyEndpoint,
+      model: replyModel,
+      lastError: replyError,
+    });
+    const sourceLabel = replySource === "lmstudio" ? "LLM reply" : "Fallback reply";
+    addBubble(playerAgent.id, `${sourceLabel}: ${reply}`.slice(0, 60));
     setConversations(cur => [{
       id: `chat-${Date.now()}`,
       time: nowTime(epoch),
       agentIds: ["player", playerAgent.id] as [string, string],
-      lines: [{ speaker: "You", text: msg }, { speaker: playerAgent.name, text: reply }],
+      lines: [{ speaker: "You", text: msg }, { speaker: playerAgent.name, text: `${sourceLabel}: ${reply}` }],
       location: "Direct",
     }, ...cur].slice(0, 30));
     setAgents(cur => cur.map(a =>
@@ -539,6 +747,22 @@ export default function AivPage() {
         </div>
       )}
 
+      {/* ── LLM status ── */}
+      <div className={`${styles.llmHud}${llmStatus.connected ? ` ${styles.llmHudConnected}` : ""}`}>
+        <div className={styles.llmHudTop}>
+          <span className={styles.llmDot} />
+          <b>LLM STATUS</b>
+          <span>{lmMode === "local" ? "LOCAL" : "LAN"}</span>
+        </div>
+        <div className={styles.llmHudLine}>
+          {llmStatus.connected ? "connected" : "fallback"} · {llmStatus.model}
+        </div>
+        <div className={styles.llmHudLine}>{llmStatus.endpoint.replace("http://", "")}</div>
+        {llmStatus.lastError && (
+          <div className={styles.llmHudError}>{llmStatus.lastError.slice(0, 54)}</div>
+        )}
+      </div>
+
       {/* ── Day HUD (top-right) ── */}
       <div className={styles.dayHud}>
         <div className={styles.dayLabel}>{language === "zh" ? "纪元" : "DAY"}</div>
@@ -689,6 +913,14 @@ export default function AivPage() {
                   <div>{displayAgent.dailyPlan}</div>
                 </div>
               )}
+              {agentThoughtLog.slice(0, 5).map(log => (
+                <div key={log.id} className={styles.toolPanelConv}>
+                  <div className={styles.toolPanelConvName}>
+                    {log.time} · {log.source === "lmstudio" ? "LLM" : "Fallback"} · {log.agentName.split(" ")[0]}
+                  </div>
+                  <div>{log.action.toUpperCase()} - {log.reason}</div>
+                </div>
+              ))}
             </>
           )}
 
