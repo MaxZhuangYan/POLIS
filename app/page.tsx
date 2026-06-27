@@ -1,6 +1,8 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   agents as seedAgents,
@@ -126,6 +128,37 @@ const zonePositions: { name: string; cx: number; cy: number }[] = [
   { name: "ASSEMBLY",     cx: 68, cy: 76 }
 ];
 
+const BUILDINGS = [
+  { id: "home",    label: "HOME",    left: "32%", top: "68%",
+    prefillEn: "Rest at home and recover energy today",
+    prefillZh: "今天在家休息恢复能量" },
+  { id: "school",  label: "SCHOOL",  left: "45%", top: "18%",
+    prefillEn: "Prioritize learning and skill development today",
+    prefillZh: "今天专注学习和技能提升" },
+  { id: "mine",    label: "MINE",    left: "68%", top: "26%",
+    prefillEn: "Focus on mining and resource gathering today",
+    prefillZh: "今天专注矿场采集和资源积累" },
+  { id: "market",  label: "MARKET",  left: "18%", top: "58%",
+    prefillEn: "Trade and negotiate at the market today",
+    prefillZh: "今天去市场交易和谈判" },
+  { id: "office",  label: "OFFICE",  left: "76%", top: "72%",
+    prefillEn: "Complete contracts and official work today",
+    prefillZh: "今天完成合约和官方工作" },
+  { id: "archive", label: "ARCHIVE", left: "10%", top: "12%",
+    prefillEn: "Research and archive knowledge today",
+    prefillZh: "今天研究和归档知识" }
+] as const;
+
+type BuildingId = typeof BUILDINGS[number]["id"];
+
+const EVENT_KIND_COLORS: Record<string, { chip: string; text: string }> = {
+  contract:   { chip: "bg-[#ff9a18] text-[#1a0a00]", text: "text-[#ff9a18]" },
+  social:     { chip: "bg-[#c7ff7e] text-[#0a1a00]", text: "text-[#c7ff7e]" },
+  rule:       { chip: "bg-cyanline/80 text-void",      text: "text-cyanline" },
+  culture:    { chip: "bg-[#c4a8ff] text-[#0a0020]",   text: "text-[#c4a8ff]" },
+  settlement: { chip: "bg-white/80 text-void",          text: "text-white" },
+};
+
 const STORAGE_KEY   = "polis-aiv-state-v3";
 const LANGUAGE_KEY  = "polis-language-v1";
 const PLAYER_KEY    = "polis-player-v1";
@@ -169,7 +202,7 @@ const copy = {
     subtitle: "AI Contract Civilization",
     language: "中文",
     epoch: "Epoch",
-    scrip: "Scrip",
+    scrip: "Credits",
     reputation: "Rep",
     compute: "Compute",
     health: "Health",
@@ -262,7 +295,7 @@ const copy = {
     subtitle: "AI 契约文明",
     language: "EN",
     epoch: "纪元",
-    scrip: "工票",
+    scrip: "贡献券",
     reputation: "声望",
     compute: "算力",
     health: "健康",
@@ -307,7 +340,7 @@ const copy = {
     myNetwork: "我的关系",
     societyView: "社会全图",
     civilizationPanel: "文明面板",
-    scripCirculation: "流通工票",
+    scripCirculation: "流通贡献券",
     avgEnergy: "平均能量",
     weakBonds: "弱关系",
     autoResolved: "自动",
@@ -517,6 +550,10 @@ export default function Home() {
   const [selectedNetworkAgentId, setSelectedNetworkAgentId] = useState<string | null>(null);
   const [dailyPlanInput, setDailyPlanInput] = useState("");
   const [temporaryPromptInput, setTemporaryPromptInput] = useState("");
+  const [selectedBuilding, setSelectedBuilding] = useState<BuildingId | null>(null);
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoTriggerCreate, setDemoTriggerCreate] = useState(false);
+  const demoTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // Creation form state
   const [creationName,   setCreationName]   = useState("");
@@ -532,12 +569,35 @@ export default function Home() {
   const playerAgentIdRef = useRef<string | null>(playerAgentId);
   const t = copy[language];
 
+  const router = useRouter();
+
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { epochRef.current = epoch; }, [epoch]);
   useEffect(() => { languageRef.current = language; }, [language]);
   useEffect(() => { missionProgressRef.current = missionProgress; }, [missionProgress]);
   useEffect(() => { pendingDecisionRef.current = pendingDecision; }, [pendingDecision]);
   useEffect(() => { playerAgentIdRef.current = playerAgentId; }, [playerAgentId]);
+
+  // Demo Mode: trigger createPlayerAgent after state is committed
+  useEffect(() => {
+    if (!demoTriggerCreate || !creationName.trim() || !creationMBTI) return;
+    setDemoTriggerCreate(false);
+    createPlayerAgent();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoTriggerCreate, creationName, creationMBTI]);
+
+  // Demo Mode: capture any click to interrupt
+  useEffect(() => {
+    if (!demoMode) return;
+    const handler = () => {
+      demoTimersRef.current.forEach(clearTimeout);
+      demoTimersRef.current = [];
+      setDemoMode(false);
+      setShowLmSettings(false);
+    };
+    document.addEventListener("click", handler, { capture: true });
+    return () => document.removeEventListener("click", handler, { capture: true });
+  }, [demoMode]);
 
   // ── Load persisted state ──────────────────────────────────────────────────
   useEffect(() => {
@@ -917,33 +977,33 @@ export default function Home() {
           : `High-risk contract arrived. Big reward but drains energy. Current energy: ${player.energy ?? 80}.`,
         triggeredBy: "hrc",
         options: [
-          { key: "A", label: zh ? "接受" : "Accept", effect: zh ? "+25 工票，-20 能量，-8 声望" : "+25 scrip, -20 energy, -8 rep" },
-          { key: "B", label: zh ? "拒绝" : "Decline", effect: zh ? "无变化，错过机会" : "No change, miss opportunity" },
-          { key: "C", label: zh ? "赌一把" : "Gamble", effect: zh ? "50/50：成功 +35 工票 -10 能量；失败 -15 工票 -10 声望" : "50/50: success +35 scrip -10 energy; fail -15 scrip -10 rep" }
+          { key: "A", label: zh ? "接受" : "Accept", effect: zh ? "贡献券可能上升，但能量与声望承压" : "Credits may rise, but energy and reputation are pressured" },
+          { key: "B", label: zh ? "拒绝" : "Decline", effect: zh ? "资源稳定，但错过机会" : "Resources stay stable, but the opportunity is missed" },
+          { key: "C", label: zh ? "赌一把" : "Gamble", effect: zh ? "高波动选择，可能影响贡献券、能量或声望" : "Volatile choice that may affect credits, energy, or reputation" }
         ]
       },
       {
         id: `decision-rep-attack-${Date.now()}`,
         situation: zh
-          ? `有人在议会公开质疑你的声望。当前声望：${player.reputation}。`
-          : `Someone publicly challenged your reputation in the Assembly. Current rep: ${player.reputation}.`,
+          ? "有人在议会公开质疑你的声望。你的公开信任正在承压。"
+          : "Someone publicly challenged your reputation in the Assembly. Your public trust is under pressure.",
         triggeredBy: "rep-attack",
         options: [
-          { key: "A", label: zh ? "辩护" : "Defend", effect: zh ? "声望>=50：+8 声望 -5 能量；否则 -10 声望 -5 能量" : "If rep>=50: +8 rep -5 energy; otherwise -10 rep -5 energy" },
-          { key: "B", label: zh ? "忽略" : "Ignore", effect: zh ? "-5 声望" : "-5 rep" },
-          { key: "C", label: zh ? "道歉" : "Apologize", effect: zh ? "-12 声望，+10 能量" : "-12 rep, +10 energy" }
+          { key: "A", label: zh ? "辩护" : "Defend", effect: zh ? "可能修复声望，也可能消耗精力并反噬" : "May repair reputation, or drain energy and backfire" },
+          { key: "B", label: zh ? "忽略" : "Ignore", effect: zh ? "低参与选择，声望可能继续受损" : "Low-engagement choice; reputation may keep slipping" },
+          { key: "C", label: zh ? "道歉" : "Apologize", effect: zh ? "缓和冲突，但会牺牲部分公众形象" : "Defuses conflict, but sacrifices some public standing" }
         ]
       },
       {
         id: `decision-debt-${Date.now()}`,
         situation: zh
-          ? `${debtor.name} 拖欠了你的工票。欠款：${debtAmount}。`
-          : `${debtor.name} owes you scrip. Debt: ${debtAmount}.`,
+          ? `${debtor.name} 拖欠了你一笔贡献券。`
+          : `${debtor.name} owes you a credit balance.`,
         triggeredBy: `debt|${debtor.id}|${debtAmount}`,
         options: [
-          { key: "A", label: zh ? "强制追收" : "Enforce", effect: zh ? `+${debtAmount} 工票，-8 声望` : `+${debtAmount} scrip, -8 rep` },
-          { key: "B", label: zh ? "免除" : "Forgive", effect: zh ? "+15 声望，0 工票" : "+15 rep, 0 scrip" },
-          { key: "C", label: zh ? "折中" : "Partial", effect: zh ? `+${Math.floor(debtAmount / 2)} 工票，+5 声望` : `+${Math.floor(debtAmount / 2)} scrip, +5 rep` }
+          { key: "A", label: zh ? "强制追收" : "Enforce", effect: zh ? "贡献券可能回收，但关系与声望承压" : "Credits may recover, but relationship and reputation are pressured" },
+          { key: "B", label: zh ? "免除" : "Forgive", effect: zh ? "贡献券机会损失，声望与关系可能改善" : "Credit opportunity is lost; reputation and relationship may improve" },
+          { key: "C", label: zh ? "折中" : "Partial", effect: zh ? "温和处理，可能兼顾贡献券与关系" : "Moderate response that may balance credits and relationship" }
         ]
       },
       {
@@ -953,21 +1013,21 @@ export default function Home() {
           : `Your agent has been overworked. Energy critically low: ${player.energy ?? 80}.`,
         triggeredBy: "energy-crisis",
         options: [
-          { key: "A", label: zh ? "充分休息" : "Rest fully", effect: zh ? "+25 能量，-10 工票" : "+25 energy, -10 scrip" },
-          { key: "B", label: zh ? "快速进食" : "Quick meal", effect: zh ? "+12 饱腹，+5 能量，-8 工票" : "+12 satiety, +5 energy, -8 scrip" },
-          { key: "C", label: zh ? "硬撑" : "Push through", effect: zh ? "-15 能量；低于 5 时额外 -20 声望" : "-15 energy; if below 5, also -20 rep" }
+          { key: "A", label: zh ? "充分休息" : "Rest fully", effect: zh ? "能量恢复，但贡献券会承压" : "Energy recovers, but credits are pressured" },
+          { key: "B", label: zh ? "快速进食" : "Quick meal", effect: zh ? "饱腹与能量改善，需要消耗贡献券" : "Satiety and energy improve, at a credit cost" },
+          { key: "C", label: zh ? "硬撑" : "Push through", effect: zh ? "继续推进，但可能引发疲劳和声望风险" : "Keeps moving, but risks fatigue and reputation damage" }
         ]
       },
       {
         id: `decision-market-opp-${Date.now()}`,
         situation: zh
-          ? "市场出现短暂套利窗口，但需要提前投入工票。"
-          : "A brief market arbitrage window opened. Requires upfront scrip.",
+          ? "市场出现短暂套利窗口，但需要提前投入贡献券。"
+          : "A brief market arbitrage window opened. Requires upfront credits.",
         triggeredBy: "market-opp",
         options: [
-          { key: "A", label: zh ? "大额投入" : "Invest big", effect: zh ? "若工票>=20：60% +40 工票；40% -20 工票" : "If scrip>=20: 60% +40 scrip; 40% -20 scrip" },
-          { key: "B", label: zh ? "小额投入" : "Invest small", effect: zh ? "投入 -8，返还 +12，净 +4 工票" : "Spend -8, return +12, net +4 scrip" },
-          { key: "C", label: zh ? "跳过" : "Skip", effect: zh ? "无变化" : "No change" }
+          { key: "A", label: zh ? "大额投入" : "Invest big", effect: zh ? "高风险，贡献券可能明显波动" : "High risk; credits may swing sharply" },
+          { key: "B", label: zh ? "小额投入" : "Invest small", effect: zh ? "稳健选择，贡献券可能小幅改善" : "Conservative choice; credits may improve modestly" },
+          { key: "C", label: zh ? "跳过" : "Skip", effect: zh ? "保持稳定，不参与市场波动" : "Stay stable and avoid market volatility" }
         ]
       },
       {
@@ -977,21 +1037,21 @@ export default function Home() {
           : `Your trusted ally ${trustedAlly.name} leaked your plans to others.`,
         triggeredBy: `betrayal|${trustedAlly.id}`,
         options: [
-          { key: "A", label: zh ? "当面对质" : "Confront", effect: zh ? "50/50：+10 声望 或 -15 声望" : "50/50: +10 rep or -15 rep" },
-          { key: "B", label: zh ? "放下" : "Let go", effect: zh ? "-8 声望，+10 能量" : "-8 rep, +10 energy" },
-          { key: "C", label: zh ? "报告" : "Report", effect: zh ? "-10 工票；声望>=40 时 +20 声望，否则 +5 声望" : "-10 scrip; +20 rep if rep>=40, otherwise +5 rep" }
+          { key: "A", label: zh ? "当面对质" : "Confront", effect: zh ? "可能重建声望与关系，也可能公开反噬" : "May restore reputation and relationship, or publicly backfire" },
+          { key: "B", label: zh ? "放下" : "Let go", effect: zh ? "节省精力，但声望与关系可能受损" : "Saves energy, but reputation and relationship may suffer" },
+          { key: "C", label: zh ? "报告" : "Report", effect: zh ? "走制度渠道，贡献券承压，声望结果取决于基础信任" : "Uses formal channels; credits are pressured and reputation depends on trust" }
         ]
       },
       {
         id: `decision-shortage-${Date.now()}`,
         situation: zh
-          ? `你的工票储备不足以维持下一纪元的基本开销。当前工票：${player.scrip}。`
-          : `Your scrip reserve is insufficient for next epoch upkeep. Current: ${player.scrip}.`,
+          ? "你的贡献券储备不足以维持下一纪元的基本开销。"
+          : "Your credit reserve is insufficient for next epoch upkeep.",
         triggeredBy: "shortage",
         options: [
-          { key: "A", label: zh ? "借款" : "Borrow", effect: zh ? "+20 工票，并立即模拟下一纪元 -30 成本，净 -10" : "+20 scrip now, immediately simulate -30 next-epoch cost, net -10" },
-          { key: "B", label: zh ? "削减开销" : "Cut costs", effect: zh ? "-15 能量，-5 声望" : "-15 energy, -5 rep" },
-          { key: "C", label: zh ? "紧急合约" : "Emergency contract", effect: zh ? "+15 工票，-18 能量" : "+15 scrip, -18 energy" }
+          { key: "A", label: zh ? "借款" : "Borrow", effect: zh ? "短期缓解压力，但未来贡献券负担增加" : "Relieves pressure now, but increases future credit burden" },
+          { key: "B", label: zh ? "削减开销" : "Cut costs", effect: zh ? "保守生存选择，能量与声望可能承压" : "Austere survival choice; energy and reputation may suffer" },
+          { key: "C", label: zh ? "紧急合约" : "Emergency contract", effect: zh ? "贡献券可能改善，但会明显消耗能量" : "Credits may improve, but energy is heavily taxed" }
         ]
       },
       {
@@ -1001,9 +1061,9 @@ export default function Home() {
           : "You received multiple social invitations but can only attend one.",
         triggeredBy: `social-inv|${socialTarget.id}`,
         options: [
-          { key: "A", label: zh ? "高曝光活动" : "High-profile event", effect: zh ? "+10 声望，-10 能量，-5 工票" : "+10 rep, -10 energy, -5 scrip" },
-          { key: "B", label: zh ? "小型聚会" : "Small gathering", effect: zh ? "+4 声望，-3 能量" : "+4 rep, -3 energy" },
-          { key: "C", label: zh ? "待在家里" : "Stay home", effect: zh ? "+8 能量，-5 声望" : "+8 energy, -5 rep" }
+          { key: "A", label: zh ? "高曝光活动" : "High-profile event", effect: zh ? "声望和关系可能改善，但能量与贡献券承压" : "Reputation and relationships may improve, but energy and credits are pressured" },
+          { key: "B", label: zh ? "小型聚会" : "Small gathering", effect: zh ? "低风险社交，声望可能小幅改善" : "Low-risk social option; reputation may improve modestly" },
+          { key: "C", label: zh ? "待在家里" : "Stay home", effect: zh ? "恢复精力，但社交声望可能下降" : "Restores energy, but social standing may decline" }
         ]
       }
     ];
@@ -1054,10 +1114,10 @@ export default function Home() {
           }
           if (key === "C") {
             if (hrcGambleWon) {
-              resultText = languageRef.current === "zh" ? "赌约成功：+35 工票，-10 能量" : "Gamble succeeded: +35 scrip, -10 energy";
+              resultText = languageRef.current === "zh" ? "冒险成功，贡献券改善但能量承压" : "Gamble succeeded; credits improved but energy was pressured";
               return finish({ scrip: clamp(agent.scrip + 35, 0, 500), energy: clamp(energy - 10, 0, 100) });
             }
-            resultText = languageRef.current === "zh" ? "赌约失败：-15 工票，-10 声望" : "Gamble failed: -15 scrip, -10 rep";
+            resultText = languageRef.current === "zh" ? "冒险失败，贡献券与声望受损" : "Gamble failed; credits and reputation suffered";
             return finish({ scrip: clamp(agent.scrip - 15, 0, 500), reputation: clamp(agent.reputation - 10, 0, 100) });
           }
           return finish({});
@@ -1067,8 +1127,8 @@ export default function Home() {
           if (key === "A") {
             const repDelta = agent.reputation >= 50 ? 8 : -10;
             resultText = agent.reputation >= 50
-              ? (languageRef.current === "zh" ? "辩护成功：+8 声望，-5 能量" : "Defense worked: +8 rep, -5 energy")
-              : (languageRef.current === "zh" ? "辩护反噬：-10 声望，-5 能量" : "Defense backfired: -10 rep, -5 energy");
+              ? (languageRef.current === "zh" ? "辩护奏效，声望改善但能量承压" : "Defense worked; reputation improved but energy was pressured")
+              : (languageRef.current === "zh" ? "辩护反噬，声望与能量受损" : "Defense backfired; reputation and energy suffered");
             return finish({ reputation: clamp(agent.reputation + repDelta, 0, 100), energy: clamp(energy - 5, 0, 100) });
           }
           if (key === "B") return finish({ reputation: clamp(agent.reputation - 5, 0, 100) });
@@ -1094,21 +1154,21 @@ export default function Home() {
           if (key === "B") return finish({ satiety: clamp(satiety + 12, 0, 100), energy: clamp(energy + 5, 0, 100), scrip: clamp(agent.scrip - 8, 0, 500) });
           const nextEnergy = energy - 15;
           const burnedOut = nextEnergy < 5;
-          if (burnedOut) resultText = languageRef.current === "zh" ? "硬撑导致崩溃：-15 能量，-20 声望" : "Burnout: -15 energy, -20 rep";
+          if (burnedOut) resultText = languageRef.current === "zh" ? "硬撑导致崩溃，能量与声望明显受损" : "Burnout; energy and reputation suffered sharply";
           return finish({ energy: clamp(nextEnergy, 0, 100), reputation: clamp(agent.reputation + (burnedOut ? -20 : 0), 0, 100) });
         }
 
         if (kind === "market-opp") {
           if (key === "A") {
             if (agent.scrip < 20) {
-              resultText = languageRef.current === "zh" ? "工票不足，无法大额投入" : "Insufficient scrip for big investment";
+              resultText = languageRef.current === "zh" ? "贡献券不足，无法大额投入" : "Insufficient credits for big investment";
               return finish({});
             }
             if (marketGambleWon) {
-              resultText = languageRef.current === "zh" ? "套利成功：+40 工票" : "Arbitrage succeeded: +40 scrip";
+              resultText = languageRef.current === "zh" ? "套利成功，贡献券改善" : "Arbitrage succeeded; credits improved";
               return finish({ scrip: clamp(agent.scrip + 40, 0, 500) });
             }
-            resultText = languageRef.current === "zh" ? "套利失败：-20 工票" : "Arbitrage failed: -20 scrip";
+            resultText = languageRef.current === "zh" ? "套利失败，贡献券受损" : "Arbitrage failed; credits suffered";
             return finish({ scrip: clamp(agent.scrip - 20, 0, 500) });
           }
           if (key === "B") return finish({ scrip: clamp(agent.scrip + 4, 0, 500) });
@@ -1119,11 +1179,11 @@ export default function Home() {
           if (key === "A") {
             if (betrayalWon) {
               affinityDelta = { agentId: subjectId, delta: 2 };
-              resultText = languageRef.current === "zh" ? "对质成功：+10 声望" : "Confrontation vindicated you: +10 rep";
+              resultText = languageRef.current === "zh" ? "对质成功，声望与关系改善" : "Confrontation worked; reputation and relationship improved";
               return finish({ reputation: clamp(agent.reputation + 10, 0, 100) });
             }
             affinityDelta = { agentId: subjectId, delta: -4 };
-            resultText = languageRef.current === "zh" ? "对方公开否认：-15 声望" : "They denied it publicly: -15 rep";
+            resultText = languageRef.current === "zh" ? "对方公开否认，声望与关系受损" : "They denied it publicly; reputation and relationship suffered";
             return finish({ reputation: clamp(agent.reputation - 15, 0, 100) });
           }
           if (key === "B") {
@@ -1463,18 +1523,17 @@ export default function Home() {
   }
 
   // ── Temporary prompt ─────────────────────────────────────────────────────
-  function executeTemporaryPrompt() {
-    const text = temporaryPromptInput.trim();
+  function executePromptText(text: string) {
     if (!text || !playerAgent) return;
 
     const result = validateTemporaryPrompt(playerAgent, text);
     const eventText = result.ok
       ? (language === "zh"
-          ? `${playerAgent.name} 使用 Temporary Prompt：${text}。校验通过，执行 ${result.focus}。`
-          : `${playerAgent.name} used Temporary Prompt: ${text}. Validator passed; executing ${result.focus}.`)
+          ? `${playerAgent.name} 使用 Prompt 票券：${text}。校验通过，执行 ${result.focus}。`
+          : `${playerAgent.name} used a Prompt Ticket: ${text}. Validated; executing ${result.focus}.`)
       : (language === "zh"
-          ? `${playerAgent.name} 的 Temporary Prompt 被拒绝：${result.reason}。`
-          : `${playerAgent.name}'s Temporary Prompt was rejected: ${result.reason}.`);
+          ? `${playerAgent.name} 的 Prompt 被拒绝：${result.reason}。`
+          : `${playerAgent.name}'s Prompt was rejected: ${result.reason}.`);
 
     if (result.ok) {
       setAgents(cur => {
@@ -1507,12 +1566,11 @@ export default function Home() {
         return next;
       });
       addSpeechBubble(playerAgent.id, text);
-      setTemporaryPromptInput("");
     }
 
     const lines: DialogueLine[] = [
       { speaker: t.validator, text: result.ok ? "validated" : result.reason },
-      { speaker: "Temporary Prompt", text }
+      { speaker: "Prompt Ticket", text }
     ];
     if (result.ok) {
       lines.push({ speaker: playerAgent.name, text: `${result.focus} / scrip ${result.delta.scrip >= 0 ? "+" : ""}${result.delta.scrip}, rep +${result.delta.reputation}, compute ${result.delta.compute >= 0 ? "+" : ""}${result.delta.compute}` });
@@ -1531,6 +1589,26 @@ export default function Home() {
       kind: result.ok ? "contract" as const : "rule" as const,
       text: eventText
     }, ...cur].slice(0, 12));
+  }
+
+  function executeTemporaryPrompt() {
+    const text = temporaryPromptInput.trim();
+    if (!text) return;
+    executePromptText(text);
+    setTemporaryPromptInput("");
+  }
+
+  // ── Unified map bottom input ──────────────────────────────────────────────
+  async function sendUnifiedMessage() {
+    const text = playerInput.trim();
+    if (!text || !playerAgent) return;
+    if ((playerAgent.promptTickets ?? 0) > 0) {
+      executePromptText(text);
+    } else {
+      await sendPlayerMessage();
+      return;
+    }
+    setPlayerInput("");
   }
 
   // ── Player policy system ─────────────────────────────────────────────────
@@ -1560,7 +1638,7 @@ export default function Home() {
         agentsRef.current = next;
         return next;
       });
-      effect = language === "zh" ? `向非玩家征收 ${collected} 工票` : `Collected ${collected} scrip from non-player agents`;
+      effect = language === "zh" ? `向非玩家征收 ${collected} 贡献券` : `Collected ${collected} scrip from non-player agents`;
     } else if (normalized.includes("market") || normalized.includes("open") || normalized.includes("trade")) {
       setMarketPrices(cur => Object.fromEntries(
         Object.entries(INITIAL_MARKET).map(([good, initial]) => [
@@ -1578,7 +1656,7 @@ export default function Home() {
         agentsRef.current = next;
         return next;
       });
-      effect = language === "zh" ? `${t.roles[mentionedRole]} +10 工票` : `${mentionedRole} agents gain +10 scrip`;
+      effect = language === "zh" ? `${t.roles[mentionedRole]} +10 贡献券` : `${mentionedRole} agents gain +10 scrip`;
     } else if (normalized.includes("rest") || normalized.includes("holiday") || normalized.includes("pause work")) {
       setAgents(prev => {
         const next = prev.map(agent => ({ ...agent, compute: clamp(agent.compute + 5, 0, 150) }));
@@ -1771,6 +1849,79 @@ export default function Home() {
 
   return GameScreen();
 
+  // ── Demo Mode ─────────────────────────────────────────────────────────────
+  function startDemo() {
+    demoTimersRef.current.forEach(clearTimeout);
+    demoTimersRef.current = [];
+    setDemoMode(true);
+
+    const schedule = (fn: () => void, ms: number) => {
+      const t = setTimeout(fn, ms);
+      demoTimersRef.current.push(t);
+    };
+
+    // Step 1 (0–3s): auto-fill create form and enter game
+    if (phase === "create") {
+      setCreationName("DEMO · NOVA");
+      setCreationMBTI("INTJ");
+      // Use a flag instead of direct call — avoids stale closure over creationName/creationMBTI
+      schedule(() => { setDemoTriggerCreate(true); }, 1200);
+    }
+
+    // Step 2 (3s): ensure game is running in game mode
+    schedule(() => {
+      setIsRunning(true);
+      setGameMode("game");
+    }, 3000);
+
+    // Step 3 (6s): inject demo events — contract, social, rule
+    schedule(() => {
+      const now = new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" });
+      const demoEvents: WorldEvent[] = [
+        { id: `demo-rule-${Date.now()}`,      time: now, kind: "rule",     text: language === "zh" ? "议会颁布劳动分配新政策" : "Council enacted a new labor distribution policy" },
+        { id: `demo-social-${Date.now()+1}`,  time: now, kind: "social",   text: language === "zh" ? "Mira Chen 与社区分享知识" : "Mira Chen shared knowledge with the community" },
+        { id: `demo-contract-${Date.now()+2}`,time: now, kind: "contract", text: language === "zh" ? "Nova 与 Unit-221 签订资源合约" : "Nova signed a resource contract with Unit-221" },
+      ];
+      setEvents(prev => [...demoEvents, ...prev].slice(0, 50));
+    }, 6000);
+
+    // Step 4 (11s): trigger decision popup
+    const demoDecision: DecisionPrompt = {
+      id: `demo-decision-${Date.now()}`,
+      situation: language === "zh"
+        ? "[演示] 商队提出高价值合约。接受并消耗算力储备，还是拒绝？"
+        : "[DEMO] A trade caravan offers a high-value contract. Accept and risk your compute, or decline?",
+      options: [
+        { key: "A", label: language === "zh" ? "接受合约" : "Accept Contract", effect: "+20 scrip, -8 compute" },
+        { key: "B", label: language === "zh" ? "安全拒绝" : "Decline Safely",  effect: "+2 reputation" },
+        { key: "C", label: language === "zh" ? "协商条款" : "Negotiate Terms", effect: "+10 scrip, -3 compute" },
+      ],
+      triggeredBy: "DEMO",
+    };
+    schedule(() => {
+      if (pendingDecisionRef.current) return;
+      setPendingDecision(demoDecision);
+      setDecisionExpiresAt(Date.now() + 8000);
+    }, 11000);
+
+    // Step 4b (16s): auto-choose option A after 5s
+    schedule(() => {
+      if (pendingDecisionRef.current?.id === demoDecision.id) {
+        applyDecisionChoice(demoDecision, "A");
+      }
+    }, 16000);
+
+    // Step 5 (19s): show LLM status panel for 4s
+    schedule(() => { setShowLmSettings(true); }, 19000);
+    schedule(() => { setShowLmSettings(false); }, 23000);
+
+    // Step 6 (26s): switch to pixel UI
+    schedule(() => { router.push("/aiv"); }, 26000);
+
+    // End (31s): cleanup flag
+    schedule(() => { setDemoMode(false); }, 31000);
+  }
+
   // ── Creation Screen ───────────────────────────────────────────────────────
   function CreateScreen() {
     const info = creationMBTI ? mbtiDescriptions[creationMBTI] : null;
@@ -1861,6 +2012,13 @@ export default function Home() {
           >
             {t.language}
           </button>
+
+          <button
+            onClick={startDemo}
+            className="mt-2 w-full rounded-lg border border-white/5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-slate-700 hover:text-slate-500 transition"
+          >
+            {language === "zh" ? "▶ 开始演示" : "▶ Demo Mode"}
+          </button>
         </div>
       </main>
     );
@@ -1885,26 +2043,32 @@ export default function Home() {
     return (
       <main className="scanlines min-h-screen bg-void text-slate-100">
         <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(69,246,255,.18),transparent_34%),linear-gradient(180deg,rgba(5,7,19,.3),#050713_82%)]" />
-        <div className="relative mx-auto flex min-h-screen w-full max-w-[1900px] flex-col gap-3 p-3 pb-16 md:pb-0">
+        <div className="relative mx-auto flex min-h-screen w-full max-w-[1800px] flex-col gap-2 p-2 pb-16 md:pb-0 xl:gap-3 xl:p-3">
 
           {/* ── Header ── */}
-          <header className="hud-panel flex flex-wrap items-center justify-between gap-3 rounded-xl px-5 py-3">
-            <div className="flex items-center gap-4">
+          <header className="hud-panel flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2 xl:px-4">
+            <div className="flex items-center gap-3">
               <div>
                 <p className="hidden font-mono text-[10px] uppercase tracking-[0.3em] text-cyanline/70 md:block">{t.subtitle}</p>
-                <h1 className="font-display text-2xl font-black uppercase text-white sm:text-3xl">POLIS</h1>
+                <h1 className="font-display text-xl font-black uppercase text-white sm:text-2xl xl:text-3xl">POLIS</h1>
               </div>
               {playerAgent && (
-                <div className="hidden items-center gap-2 rounded-lg border border-cyanline/30 bg-cyanline/5 px-3 py-2 md:flex">
+                <div className="hidden items-center gap-2 rounded-lg border border-cyanline/30 bg-cyanline/5 px-2 py-1.5 md:flex">
                   <Image className="pixel-icon h-6 w-6" src={roleIcons[playerAgent.role]} alt="" width={32} height={32} />
-                  <span className="font-mono text-xs text-cyanline">{playerAgent.name}</span>
+                  <span className="max-w-[120px] truncate font-mono text-xs text-cyanline xl:max-w-none">{playerAgent.name}</span>
                   <span className="rounded bg-cyanline/20 px-1.5 py-0.5 font-mono text-[10px] text-cyanline">YOU</span>
                 </div>
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <Stat label={t.epoch}      value={epoch.toString()}                  tone="cyan"  />
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Day/Time HUD */}
+              <div className="rounded border border-mint/30 bg-mint/[0.07] px-2.5 py-1">
+                <p className="font-mono text-[8px] uppercase tracking-widest text-mint/50">{language === "zh" ? "纪元" : "DAY"}</p>
+                <p className="font-mono text-sm font-bold leading-none text-mint">
+                  {epoch} · {new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}
+                </p>
+              </div>
               <div className="hidden md:block">
                 <Stat label={t.scrip}      value={settlement.scrip.toString()}        tone="amber" />
               </div>
@@ -1917,17 +2081,17 @@ export default function Home() {
 
               {/* Mode toggle */}
               <div className="hidden overflow-hidden rounded-lg border border-white/10 md:flex">
-                <button onClick={() => setGameMode("game")} className={`px-3 py-2 font-mono text-[10px] uppercase transition ${gameMode === "game" ? "bg-cyanline/20 text-cyanline" : "text-slate-500 hover:text-slate-300"}`}>{t.playerMode}</button>
-                <button onClick={() => setGameMode("data")} className={`px-3 py-2 font-mono text-[10px] uppercase transition ${gameMode === "data" ? "bg-amberline/20 text-amberline" : "text-slate-500 hover:text-slate-300"}`}>{t.observerMode}</button>
+                <button onClick={() => setGameMode("game")} className={`px-2.5 py-1.5 font-mono text-[10px] uppercase transition ${gameMode === "game" ? "bg-cyanline/20 text-cyanline" : "text-slate-500 hover:text-slate-300"}`}>{t.playerMode}</button>
+                <button onClick={() => setGameMode("data")} className={`px-2.5 py-1.5 font-mono text-[10px] uppercase transition ${gameMode === "data" ? "bg-amberline/20 text-amberline" : "text-slate-500 hover:text-slate-300"}`}>{t.observerMode}</button>
               </div>
 
               <button className="hud-button" onClick={() => setIsRunning(v => !v)}>{isRunning ? t.pause : t.run}</button>
               <button className="hud-button hidden md:block" onClick={settleEpoch}>{t.settlement}</button>
-              <button onClick={() => setLanguage(l => l === "en" ? "zh" : "en")} className="rounded-md border border-white/10 px-3 py-2 font-mono text-[10px] uppercase text-slate-400 hover:text-slate-200">{t.language}</button>
+              <button onClick={() => setLanguage(l => l === "en" ? "zh" : "en")} className="rounded-md border border-white/10 px-2.5 py-1.5 font-mono text-[10px] uppercase text-slate-400 hover:text-slate-200">{t.language}</button>
               <div ref={lmSettingsRef} className="relative hidden md:block">
                 <button
                   onClick={() => setShowLmSettings(v => !v)}
-                  className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-[10px] uppercase text-slate-300 hover:border-cyanline/30 hover:text-white"
+                  className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[10px] uppercase text-slate-300 hover:border-cyanline/30 hover:text-white"
                 >
                   <span className={`h-2 w-2 rounded-full ${lmMode === "local" ? "bg-mint" : "bg-cyanline"}`} />
                   <span>{lmMode === "local" ? "LOCAL" : lanIp}</span>
@@ -1967,15 +2131,24 @@ export default function Home() {
                   </div>
                 )}
               </div>
-              <button onClick={resetGame} className="hidden rounded-md border border-blood/30 bg-blood/5 px-3 py-2 font-mono text-[10px] uppercase text-blood hover:bg-blood/10 md:block">{t.reset}</button>
+              <Link href="/aiv" className="hidden rounded-md border border-mint/30 bg-mint/5 px-2.5 py-1.5 font-mono text-[10px] uppercase text-mint hover:bg-mint/10 md:block">
+                {language === "zh" ? "像素版 →" : "Pixel UI →"}
+              </Link>
+              <button onClick={resetGame} className="hidden rounded-md border border-blood/30 bg-blood/5 px-2.5 py-1.5 font-mono text-[10px] uppercase text-blood hover:bg-blood/10 md:block">{t.reset}</button>
+              <button
+                onClick={startDemo}
+                className={`hidden rounded-md border px-2.5 py-1.5 font-mono text-[9px] uppercase transition md:block ${demoMode ? "border-amberline/40 bg-amberline/10 text-amberline" : "border-white/5 bg-transparent text-slate-700 hover:text-slate-500"}`}
+              >
+                {demoMode ? "● DEMO" : "Demo"}
+              </button>
             </div>
           </header>
 
           {/* ── Body ── */}
-          <div className="flex flex-1 flex-col gap-3 md:grid md:grid-cols-[280px_1fr] xl:grid xl:grid-cols-[300px_1fr_340px]">
+          <div className="flex flex-1 flex-col gap-2 md:grid md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)_300px] xl:grid-cols-[280px_minmax(0,1fr)_320px] 2xl:grid-cols-[300px_minmax(0,1fr)_340px] xl:gap-3">
 
             {/* ── Left Panel ── */}
-            <aside className={`${mobileTab === "agent" ? "flex" : "hidden"} flex-col gap-3 md:flex`}>
+            <aside className={`${mobileTab === "agent" ? "flex" : "hidden"} flex-col gap-2 md:flex xl:gap-3`}>
               {gameMode === "data" ? (
                 <Panel title={t.civilizationPanel} action={<span className="rounded bg-amberline/15 px-2 py-0.5 font-mono text-[10px] uppercase text-amberline">{t.observerMode}</span>}>
                   <div className="grid grid-cols-2 gap-2">
@@ -1990,7 +2163,7 @@ export default function Home() {
                   </div>
                   <div className="mt-3 rounded border border-white/10 bg-white/[0.03] p-2">
                     <p className="mb-2 font-mono text-[10px] uppercase text-slate-500">{t.roster}</p>
-                    <div className="max-h-[420px] space-y-1.5 overflow-auto pr-1">
+                    <div className="max-h-[300px] space-y-1 overflow-auto pr-1 xl:max-h-[420px]">
                       {leaderboard.map((agent, index) => (
                         <button
                           key={agent.id}
@@ -2013,9 +2186,9 @@ export default function Home() {
               <Panel title={t.yourAgent} action={
                 <span className="rounded bg-cyanline/20 px-2 py-0.5 font-mono text-[10px] uppercase text-cyanline">YOU</span>
               }>
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <div className="pixel-block relative grid h-16 w-16 shrink-0 place-items-center border border-cyanline/40 bg-cyanline/10 p-1">
+                <div className="space-y-2 xl:space-y-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="pixel-block relative grid h-14 w-14 shrink-0 place-items-center border border-cyanline/40 bg-cyanline/10 p-1 xl:h-16 xl:w-16">
                       <Image className="pixel-icon h-full w-full object-contain" src={roleIcons[viewAgent.role]} alt="" width={128} height={128} />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -2045,14 +2218,14 @@ export default function Home() {
                   {viewAgent.thoughts && (
                     <div className="rounded border border-cyanline/15 bg-cyanline/[0.04] p-2">
                       <p className="mb-1 font-mono text-[10px] uppercase text-slate-500">{t.thoughts}</p>
-                      <p className="text-xs leading-5 text-cyanline">{viewAgent.thoughts}</p>
+                      <p className="line-clamp-3 text-xs leading-5 text-cyanline">{viewAgent.thoughts}</p>
                     </div>
                   )}
 
                   <div className="rounded border border-white/10 bg-white/[0.03] p-2">
                     <p className="font-mono text-[10px] uppercase text-slate-500">{t.currentMission}</p>
-                    <p className="mt-1 text-xs text-amberline">{viewAgent.currentMission}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">{viewAgent.status}</p>
+                    <p className="mt-1 truncate text-xs text-amberline">{viewAgent.currentMission}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-400">{viewAgent.status}</p>
                     {activeMission && (
                       <div className="mt-2">
                         <div className="mb-1 flex items-center justify-between gap-2 font-mono text-[10px] uppercase text-slate-500">
@@ -2115,79 +2288,14 @@ export default function Home() {
                 </Panel>
               )}
 
-              {/* Temporary Prompt */}
-              {playerAgent && (
-                <Panel title={t.tempPrompt} action={
-                  <span className="rounded bg-violet-400/15 px-2 py-0.5 font-mono text-[10px] uppercase text-violet-200">
-                    {t.tickets}: {playerAgent.promptTickets ?? 0}
-                  </span>
-                }>
-                  <div className="space-y-2">
-                    <div className="rounded border border-violet-300/20 bg-violet-300/[0.05] p-2">
-                      <div className="mb-1 flex items-center justify-between gap-2 font-mono text-[10px] uppercase text-slate-500">
-                        <span>{t.validator}</span>
-                        <span className={(playerAgent.promptTickets ?? 0) > 0 ? "text-cyanline" : "text-blood"}>
-                          {(playerAgent.promptTickets ?? 0) > 0 ? "ready" : "no_ticket"}
-                        </span>
-                      </div>
-                      <p className="text-[11px] leading-4 text-slate-400">
-                        {language === "zh"
-                          ? "即时指令会消耗票券，并校验算力/工票后打断当前任务。"
-                          : "Interrupts the current task after ticket, compute, and scrip validation."}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <input
-                        className="min-w-0 flex-1 rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 font-mono text-xs text-white placeholder-slate-600 outline-none focus:border-violet-300/50 focus:bg-violet-300/5"
-                        placeholder={t.tempPromptPlaceholder}
-                        value={temporaryPromptInput}
-                        onChange={e => setTemporaryPromptInput(e.target.value)}
-                        onKeyDown={e => e.key === "Enter" && executeTemporaryPrompt()}
-                        disabled={(playerAgent.promptTickets ?? 0) <= 0}
-                      />
-                      <button
-                        onClick={executeTemporaryPrompt}
-                        disabled={!temporaryPromptInput.trim() || (playerAgent.promptTickets ?? 0) <= 0}
-                        className="shrink-0 rounded-lg border border-violet-300/50 bg-violet-300/10 px-3 py-2 font-mono text-[10px] uppercase text-violet-200 hover:bg-violet-300/20 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {t.executePrompt}
-                      </button>
-                    </div>
-                  </div>
-                </Panel>
-              )}
-
-              {/* Player Chat */}
-              {playerAgent && (
-                <Panel title={`→ ${playerAgent.name}`}>
-                  <div className="flex gap-2">
-                    <input
-                      className="flex-1 rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 font-mono text-xs text-white placeholder-slate-600 outline-none focus:border-cyanline/50 focus:bg-cyanline/5"
-                      placeholder={t.sendMessage}
-                      value={playerInput}
-                      onChange={e => setPlayerInput(e.target.value)}
-                      onKeyDown={e => e.key === "Enter" && sendPlayerMessage()}
-                      disabled={isSending}
-                    />
-                    <button
-                      onClick={sendPlayerMessage}
-                      disabled={!playerInput.trim() || isSending}
-                      className="shrink-0 rounded-lg border border-cyanline/50 bg-cyanline/10 px-3 py-2 font-mono text-xs text-cyanline hover:bg-cyanline/20 disabled:opacity-30"
-                    >
-                      {isSending ? "..." : t.send}
-                    </button>
-                  </div>
-                </Panel>
-              )}
-
               {/* Roster */}
               <Panel title={t.roster} action={<button className="hud-button" onClick={createRandomAgent}>{t.addAgent}</button>}>
-                <div className="max-h-[340px] space-y-1.5 overflow-auto pr-1">
+                <div className="max-h-[240px] space-y-1 overflow-auto pr-1 xl:max-h-[340px]">
                   {agents.map(agent => (
                     <button
                       key={agent.id}
                       onClick={() => setSelectedId(agent.id)}
-                      className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${
+                      className={`w-full rounded-lg border px-2 py-1.5 text-left transition ${
                         agent.id === selectedId
                           ? "border-cyanline/60 bg-cyanline/10"
                           : "border-white/10 bg-white/[0.03] hover:border-cyanline/25"
@@ -2214,7 +2322,7 @@ export default function Home() {
             </aside>
 
             {/* ── Center: Map ── */}
-            <section className={`${mobileTab === "map" ? "flex" : "hidden"} flex-col gap-3 md:flex`}>
+            <section className={`${mobileTab === "map" ? "flex" : "hidden"} flex-col gap-2 md:flex xl:gap-3`}>
               <Panel
                 title={gameMode === "game" ? "Player Society Space" : "Observer Society Space"}
                 action={
@@ -2224,62 +2332,45 @@ export default function Home() {
                   </div>
                 }
               >
-                <div className="map-grid relative h-[calc(100dvh-180px)] overflow-hidden rounded-lg border border-cyanline/15 md:h-[420px] xl:h-[580px]">
+                <div className="map-grid relative h-[calc(100dvh-176px)] overflow-hidden rounded-lg border border-white/10 md:h-[calc(100dvh-132px)] md:min-h-[430px] lg:min-h-0 xl:h-[calc(100dvh-144px)] 2xl:max-h-[760px]">
+                  {/* Pixel town map background */}
                   <Image
-                    className="pixel-icon absolute inset-0 h-full w-full object-cover opacity-80 saturate-[.92]"
+                    className="pixel-icon absolute inset-0 h-full w-full object-cover"
                     src="/assets/polis-pixel-town-map.png"
                     alt="Polis town map"
                     width={1600} height={900} priority
                   />
-                  <div className="absolute inset-0 bg-void/20" />
 
-                  {/* Relationship lines */}
-                  <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-                    {agents.flatMap(agent =>
-                      Object.entries(agent.affinity).map(([tid, val]) => {
-                        const target = agents.find(a => a.id === tid);
-                        if (!target) return null;
-                        const color = val >= 7 ? "rgba(121,255,191,.34)" : val <= 4 ? "rgba(255,73,109,.32)" : "rgba(69,246,255,.22)";
-                        return (
-                          <line key={`${agent.id}-${tid}`}
-                            x1={agent.x} y1={agent.y} x2={target.x} y2={target.y}
-                            stroke={color} strokeWidth={val >= 7 ? "0.36" : "0.25"}
-                            strokeDasharray={val <= 4 ? "1.4 1.2" : val >= 7 ? "0" : "2 1.4"} />
-                        );
-                      })
-                    )}
-                    {/* Player agent mission line */}
-                    {playerAgent && activeMission && (
-                      <line x1={agentMotion[playerAgent.id]?.x ?? playerAgent.x} y1={agentMotion[playerAgent.id]?.y ?? playerAgent.y}
-                        x2={activeMission.x} y2={activeMission.y}
-                        stroke="rgba(255,202,99,.6)" strokeWidth="0.4" strokeDasharray="2 1.4" />
-                    )}
-                  </svg>
-
-                  {/* Zone overlays */}
-                  <div className="absolute left-[8%] top-[10%] h-[26%] w-[31%] border border-cyanline/20 bg-cyanline/[0.04]" />
-                  <div className="absolute bottom-[11%] left-[15%] h-[21%] w-[28%] border border-amberline/20 bg-amberline/[0.05]" />
-                  <div className="absolute right-[9%] top-[18%] h-[55%] w-[25%] border border-mint/20 bg-mint/[0.04]" />
-                  <div className="absolute right-[17%] bottom-[11%] h-[18%] w-[25%] border border-blood/20 bg-blood/[0.04]" />
-
-                  {/* Zone labels */}
-                  {zoneLabels.map(z => (
-                    <span key={z.name} className="absolute flex items-center gap-1 rounded border border-white/10 bg-black/45 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-slate-300" style={{ left: z.x, top: z.y }}>
-                      <Image className="pixel-icon h-4 w-4" src={zoneIcons[z.name]} alt="" width={24} height={24} />
-                      {z.name}
-                    </span>
-                  ))}
-
-                  {/* Mission markers */}
-                  {missions.map(m => (
-                    <div key={m.id}
-                      className="absolute -translate-x-1/2 -translate-y-1/2 rounded border border-amberline/50 bg-black/70 px-2 py-1 font-mono text-[10px] uppercase text-amberline/80"
-                      style={{ left: `${m.x}%`, top: `${m.y}%` }}
+                  {/* Building signs */}
+                  {BUILDINGS.map(b => (
+                    <button
+                      key={b.id}
+                      className={`building-sign${selectedBuilding === b.id ? " active" : ""}`}
+                      style={{ left: b.left, top: b.top }}
+                      onClick={() => {
+                        setSelectedBuilding(prev => prev === b.id ? null : b.id);
+                        if (selectedBuilding !== b.id) {
+                          setDailyPlanInput(language === "zh" ? b.prefillZh : b.prefillEn);
+                        }
+                      }}
                     >
-                      <Image className="pixel-icon mr-1 inline-block h-4 w-4 align-middle" src="/assets/polis-icons/mission.png" alt="" width={24} height={24} />
-                      {m.sector}
-                    </div>
+                      {b.label}
+                    </button>
                   ))}
+
+                  {/* Building action panel */}
+                  {selectedBuilding && (() => {
+                    const bld = BUILDINGS.find(b => b.id === selectedBuilding)!;
+                    return (
+                      <div className="absolute left-1/2 top-2 z-50 -translate-x-1/2 rounded-lg border border-white/25 bg-black/80 px-4 py-2.5 text-center shadow-lg backdrop-blur-sm">
+                        <p className="font-mono text-[10px] uppercase tracking-widest text-white/50">{bld.label}</p>
+                        <p className="mt-0.5 text-xs text-white">{language === "zh" ? bld.prefillZh : bld.prefillEn}</p>
+                        <p className="mt-1 font-mono text-[10px] text-cyanline">
+                          {language === "zh" ? "↓ 已预填 Daily Plan 输入框" : "↓ Prefilled Daily Plan input"}
+                        </p>
+                      </div>
+                    );
+                  })()}
 
                   {/* Agent sprites (moving) */}
                   {agents.map(agent => {
@@ -2300,14 +2391,12 @@ export default function Home() {
                           <span className="absolute -top-4 left-1/2 -translate-x-1/2 rounded bg-cyanline/90 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase text-void">YOU</span>
                         )}
                         <Image
-                          className="pixel-icon h-12 w-12 object-contain drop-shadow-[0_6px_5px_rgba(0,0,0,.55)]"
+                          className="pixel-icon h-12 w-12 object-contain drop-shadow-[0_4px_8px_rgba(0,0,0,.8)]"
                           src={roleSprites[agent.role]} alt={agent.name} width={80} height={80}
                         />
-                        {/* Action label */}
                         <span className={`agent-bubble ${motion.action === "idle" ? "opacity-0" : "opacity-100"}`}>
                           {t.actions[motion.action]}
                         </span>
-                        {/* Speech bubble */}
                         {bubble && (
                           <span className="speech-bubble absolute bottom-full left-1/2 mb-1 w-max max-w-[140px] -translate-x-1/2 rounded-lg border border-white/20 bg-void/90 px-2 py-1 font-mono text-[10px] leading-tight text-white shadow-lg">
                             {bubble.text}
@@ -2322,37 +2411,73 @@ export default function Home() {
                     <button
                       key={agent.id}
                       onClick={() => setSelectedId(agent.id)}
-                      className={`absolute min-w-[88px] -translate-x-1/2 -translate-y-1/2 rounded border px-2 py-1 text-left transition ${
-                        agent.id === selectedId ? "scale-110 border-white bg-white text-void" : "border-white/30 bg-void/80 text-white"
+                      className={`absolute min-w-[80px] -translate-x-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 text-left transition ${
+                        agent.id === selectedId ? "scale-110 border-white bg-white text-void" : "border-black/60 bg-black/70 text-white"
                       } ${gameMode === "game" && agent.isPlayer ? "border-cyanline bg-cyanline/20 text-cyanline" : ""}`}
-                      style={{ left: `${agent.x}%`, top: `${agent.y}%`, boxShadow: `0 0 18px ${roleColors[agent.role]}44` }}
+                      style={{ left: `${agent.x}%`, top: `${agent.y}%`, zIndex: 22 }}
                     >
                       <span className="flex items-center gap-1">
-                        <Image className="pixel-icon h-6 w-6 shrink-0" src={roleIcons[agent.role]} alt="" width={32} height={32} />
+                        <Image className="pixel-icon h-5 w-5 shrink-0" src={roleIcons[agent.role]} alt="" width={28} height={28} />
                         <span className="min-w-0">
-                          <span className="block truncate text-[11px] font-black">{agent.name.split(" ")[0]}</span>
-                          <span className="block font-mono text-[9px] uppercase opacity-70">{t.roles[agent.role]}</span>
+                          <span className="block truncate text-[10px] font-black">{agent.name.split(" ")[0]}</span>
+                          <span className="block font-mono text-[8px] uppercase opacity-70">{t.roles[agent.role]}</span>
                         </span>
                       </span>
                     </button>
                   ))}
 
-                  {/* Legend */}
-                  <div className="absolute bottom-2 left-2 right-2 flex flex-wrap gap-1.5">
-                    {Object.entries(roleColors).map(([role, color]) => (
-                      <span key={role} className="flex items-center gap-1 rounded border border-white/10 bg-black/50 px-1.5 py-0.5 font-mono text-[9px] uppercase text-slate-300">
-                        <Image className="pixel-icon h-3.5 w-3.5" src={roleIcons[role as Agent["role"]]} alt="" width={20} height={20} />
-                        {t.roles[role as Agent["role"]]}
-                      </span>
-                    ))}
+                  {/* Event feed — left overlay */}
+                  <div className="pointer-events-none absolute left-2 top-1/2 z-30 w-[168px] -translate-y-1/2 space-y-1 xl:w-[190px]">
+                    {events.slice(0, 6).reverse().map(ev => {
+                      const colors = EVENT_KIND_COLORS[ev.kind] ?? EVENT_KIND_COLORS.settlement;
+                      return (
+                        <div key={ev.id} className="rounded bg-black/60 px-2 py-1 backdrop-blur-sm">
+                          <span className={`event-chip ${colors.chip}`}>{ev.kind.slice(0, 4).toUpperCase()}</span>
+                          <span className={`font-mono text-[9px] leading-snug ${colors.text}`}>
+                            {ev.text.slice(0, 42)}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
+
+                  {/* Bottom unified chat bar */}
+                  {playerAgent && gameMode === "game" && (
+                    <div className="absolute bottom-0 left-0 right-0 z-40 flex items-center gap-2 border-t border-white/10 bg-black/75 px-3 py-2 backdrop-blur-sm">
+                      <span className="shrink-0 font-mono text-[10px] text-slate-400">⌨</span>
+                      <input
+                        className="min-w-0 flex-1 rounded border border-white/15 bg-white/[0.06] px-3 py-1.5 font-mono text-xs text-white placeholder-slate-500 outline-none focus:border-cyanline/50 focus:bg-cyanline/5"
+                        placeholder={
+                          (playerAgent.promptTickets ?? 0) > 0
+                            ? (language === "zh" ? `指令 ${playerAgent.name}（消耗票券）…` : `Prompt ${playerAgent.name} (uses ticket)…`)
+                            : (language === "zh" ? `发送消息给 ${playerAgent.name}…` : `Message ${playerAgent.name}…`)
+                        }
+                        value={playerInput}
+                        onChange={e => setPlayerInput(e.target.value)}
+                        onKeyDown={e => e.key === "Enter" && sendUnifiedMessage()}
+                        disabled={isSending}
+                      />
+                      {(playerAgent.promptTickets ?? 0) > 0 && (
+                        <span className="shrink-0 rounded border border-[#ff9a18]/50 bg-[#ff9a18]/10 px-2 py-1 font-mono text-[10px] font-bold text-[#ff9a18]">
+                          🎟 ×{playerAgent.promptTickets}
+                        </span>
+                      )}
+                      <button
+                        onClick={sendUnifiedMessage}
+                        disabled={!playerInput.trim() || isSending}
+                        className="shrink-0 rounded border border-cyanline/50 bg-cyanline/10 px-3 py-1.5 font-mono text-[10px] uppercase text-cyanline hover:bg-cyanline/20 disabled:opacity-30"
+                      >
+                        {isSending ? "…" : (language === "zh" ? "发送" : "Send")}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </Panel>
 
               {/* Relationships row (only in data mode) */}
               {gameMode === "data" && (
                 <Panel title={t.relationships}>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 gap-2 xl:gap-3">
                     {Object.entries(viewAgent.affinity).slice(0, 6).map(([id, val]) => {
                       const peer = agents.find(a => a.id === id);
                       return (
@@ -2373,7 +2498,7 @@ export default function Home() {
             </section>
 
             {/* ── Right Panel ── */}
-            <aside className={`${mobileTab === "chat" ? "flex" : "hidden"} flex-col gap-3 md:col-span-2 md:flex md:max-h-[280px] md:overflow-y-auto xl:col-span-1 xl:max-h-none xl:overflow-visible`}>
+            <aside className={`${mobileTab === "chat" ? "flex" : "hidden"} flex-col gap-2 md:col-span-2 md:flex md:max-h-[280px] md:overflow-y-auto lg:col-span-1 lg:max-h-[calc(100dvh-110px)] lg:overflow-y-auto xl:max-h-[calc(100dvh-116px)] xl:gap-3`}>
 
               {/* Tab bar */}
               <div className="hud-panel flex overflow-hidden rounded-xl">
@@ -2381,7 +2506,7 @@ export default function Home() {
                   ? (["conversations", "economy", "events"] as RightTab[])
                   : (["network", "economy", "events", "leaderboard"] as RightTab[])
                 ).map(tab => (
-                  <button key={tab} onClick={() => setRightTab(tab)} className={`flex-1 py-2.5 font-mono text-[10px] uppercase tracking-wider transition ${rightTab === tab ? "bg-cyanline/15 text-cyanline" : "text-slate-500 hover:text-slate-300"}`}>
+                  <button key={tab} onClick={() => setRightTab(tab)} className={`flex-1 py-2 font-mono text-[9px] uppercase tracking-wider transition xl:text-[10px] ${rightTab === tab ? "bg-cyanline/15 text-cyanline" : "text-slate-500 hover:text-slate-300"}`}>
                     {tab === "conversations" ? t.conversations : tab === "economy" ? t.economy : tab === "events" ? t.events : tab === "network" ? t.relationships : t.leaderboard}
                   </button>
                 ))}
@@ -2404,22 +2529,22 @@ export default function Home() {
               {/* Conversations */}
               {rightTab === "conversations" && (
                 <Panel title={t.conversations}>
-                  <div className="max-h-[calc(100vh-280px)] space-y-2 overflow-auto pr-1">
+                  <div className="max-h-[calc(100dvh-230px)] space-y-1.5 overflow-auto pr-1 lg:max-h-[calc(100dvh-190px)]">
                     {displayedConversations.length === 0 && (
                       <p className="py-6 text-center font-mono text-xs text-slate-600">Waiting for agents to talk…</p>
                     )}
                     {displayedConversations.map(conv => {
                       const isPlayerConv = conv.agentIds.includes("player") || conv.agentIds[0] === "system";
                       return (
-                        <div key={conv.id} className={`rounded-lg border p-2.5 ${isPlayerConv ? "border-cyanline/30 bg-cyanline/[0.05]" : "border-white/10 bg-white/[0.03]"}`}>
-                          <div className="mb-1.5 flex justify-between font-mono text-[10px] uppercase text-slate-500">
+                        <div key={conv.id} className={`rounded-lg border p-2 ${isPlayerConv ? "border-cyanline/30 bg-cyanline/[0.05]" : "border-white/10 bg-white/[0.03]"}`}>
+                          <div className="mb-1 flex justify-between font-mono text-[9px] uppercase text-slate-500">
                             <span>{conv.location}</span>
                             <span>{conv.time}</span>
                           </div>
                           {conv.lines.map((line, i) => {
                             const isPlayer = line.speaker === "You" || line.speaker === "System";
                             return (
-                              <div key={i} className={`flex gap-2 text-xs ${i > 0 ? "mt-1.5" : ""}`}>
+                              <div key={i} className={`flex gap-2 text-[11px] leading-4 ${i > 0 ? "mt-1" : ""}`}>
                                 <span className={`shrink-0 font-mono text-[10px] font-bold ${isPlayer ? "text-cyanline" : "text-amberline"}`}>{line.speaker}:</span>
                                 <span className="text-slate-300">{line.text}</span>
                               </div>
@@ -2436,9 +2561,9 @@ export default function Home() {
               {rightTab === "economy" && (
                 <>
                   <Panel title={t.leaderboard}>
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       {leaderboard.slice(0, 8).map((agent, i) => (
-                        <div key={agent.id} className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 ${agent.isPlayer ? "border-cyanline/40 bg-cyanline/5" : "border-white/10 bg-white/[0.03]"}`}>
+                        <div key={agent.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${agent.isPlayer ? "border-cyanline/40 bg-cyanline/5" : "border-white/10 bg-white/[0.03]"}`}>
                           <span className="w-4 shrink-0 font-mono text-[10px] text-slate-500">{i + 1}.</span>
                           <Image className="pixel-icon h-5 w-5 shrink-0" src={roleIcons[agent.role]} alt="" width={24} height={24} />
                           <span className="min-w-0 flex-1 truncate text-xs text-white">{agent.name}</span>
@@ -2450,9 +2575,9 @@ export default function Home() {
                   </Panel>
 
                   <Panel title={t.marketPrices}>
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       {marketRows.map(row => (
-                        <div key={row.good} className="grid grid-cols-[82px_1fr_54px_48px] items-center gap-2">
+                        <div key={row.good} className="grid grid-cols-[70px_1fr_45px_40px] items-center gap-2 xl:grid-cols-[82px_1fr_54px_48px]">
                           <span className="font-mono text-[10px] uppercase text-slate-400">{row.good}</span>
                           <div className="overflow-hidden rounded bg-white/10">
                             <div className="h-1.5 rounded bg-amberline transition-all" style={{ width: `${Math.min(100, (row.price / (row.initial * 2)) * 100)}%` }} />
@@ -2464,15 +2589,15 @@ export default function Home() {
                         </div>
                       ))}
                     </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
+                    <div className="mt-2 grid grid-cols-2 gap-2">
                       <Metric label={t.giniCoeff} value={gini.toFixed(2)} valueClassName={gini < 0.3 ? "text-mint" : gini <= 0.5 ? "text-amberline" : "text-blood"} />
                       <Metric label={t.totalAgents} value={agents.length} />
                       <Metric label={t.avgWealth} value={Math.round(agents.reduce((s, a) => s + agentWealth(a), 0) / agents.length)} />
                       <Metric label={t.topEarner} value={leaderboard[0]?.name.split(" ")[0] ?? "—"} />
                     </div>
-                    <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] p-2">
+                    <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] p-2">
                       <p className="mb-2 font-mono text-[10px] uppercase text-slate-500">{t.wealthDistribution}</p>
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         {topScripAgents.map(agent => (
                           <div key={agent.id}>
                             <div className="mb-1 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-400">
@@ -2536,14 +2661,14 @@ export default function Home() {
               {/* Events */}
               {rightTab === "events" && (
                 <Panel title={t.worldEvents}>
-                  <div className="max-h-[calc(100vh-280px)] space-y-2 overflow-auto pr-1">
+                  <div className="max-h-[calc(100dvh-230px)] space-y-1.5 overflow-auto pr-1 lg:max-h-[calc(100dvh-190px)]">
                     {displayedEvents.map(ev => (
-                      <div key={ev.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5">
-                        <div className="mb-1 flex justify-between font-mono text-[10px] uppercase text-slate-500">
+                      <div key={ev.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+                        <div className="mb-1 flex justify-between font-mono text-[9px] uppercase text-slate-500">
                           <span>{ev.kind}</span>
                           <span>{ev.time}</span>
                         </div>
-                        <p className="text-xs leading-5 text-slate-300">{ev.text}</p>
+                        <p className="text-[11px] leading-4 text-slate-300">{ev.text}</p>
                       </div>
                     ))}
                   </div>
@@ -2553,9 +2678,9 @@ export default function Home() {
               {/* Leaderboard */}
               {rightTab === "leaderboard" && (
                 <Panel title={t.leaderboard}>
-                  <div className="space-y-1.5">
+                  <div className="space-y-1">
                     {leaderboard.map((agent, i) => (
-                      <div key={agent.id} className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 ${agent.isPlayer ? "border-cyanline/40 bg-cyanline/5" : "border-white/10 bg-white/[0.03]"}`}>
+                      <div key={agent.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${agent.isPlayer ? "border-cyanline/40 bg-cyanline/5" : "border-white/10 bg-white/[0.03]"}`}>
                         <span className="w-4 shrink-0 font-mono text-[10px] text-slate-500">{i + 1}.</span>
                         <Image className="pixel-icon h-5 w-5 shrink-0" src={roleIcons[agent.role]} alt="" width={24} height={24} />
                         <span className="min-w-0 flex-1 truncate text-xs text-white">{agent.name}</span>
@@ -2685,16 +2810,16 @@ function DecisionLogPanel({
   onToggle: () => void;
 }) {
   return (
-    <section className="hud-panel rounded-xl p-3">
+    <section className="hud-panel rounded-xl p-2.5 xl:p-3">
       <button onClick={onToggle} className="flex w-full items-center justify-between gap-2 border-b border-white/10 pb-2 text-left">
         <h2 className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-cyanline">{title}</h2>
         <span className="font-mono text-[10px] text-slate-500">{open ? "[-]" : "[+]"}</span>
       </button>
       {open && (
-        <div className="mt-3 max-h-[340px] space-y-2 overflow-auto pr-1">
+        <div className="mt-2 max-h-[240px] space-y-1.5 overflow-auto pr-1 xl:mt-3 xl:max-h-[340px] xl:space-y-2">
           {history.length === 0 && <p className="py-4 text-center font-mono text-xs text-slate-600">{emptyText}</p>}
           {history.slice(0, 10).map(record => (
-            <div key={record.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5">
+            <div key={record.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate font-mono text-[10px] uppercase text-slate-500">{record.time}</p>
@@ -2714,7 +2839,7 @@ function DecisionLogPanel({
                 <div className="mt-2 flex flex-wrap gap-1">
                   {record.affinityChanges.map(change => (
                     <span key={`${record.id}-${change.agentName}`} className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${change.delta >= 0 ? "border-mint/30 bg-mint/10 text-mint" : "border-blood/30 bg-blood/10 text-blood"}`}>
-                      {change.delta >= 0 ? "↑" : "↓"} {change.agentName.split(" ")[0]} {change.delta >= 0 ? "+" : ""}{change.delta}
+                      {change.delta >= 0 ? "↑" : "↓"} {change.agentName.split(" ")[0]}
                     </span>
                   ))}
                 </div>
@@ -2728,14 +2853,13 @@ function DecisionLogPanel({
 }
 
 function DeltaChip({ label, value }: { label: string; value: number }) {
+  if (value === 0) return null;
   const tone = value > 0
     ? "border-mint/30 bg-mint/10 text-mint"
-    : value < 0
-      ? "border-blood/30 bg-blood/10 text-blood"
-      : "border-white/10 bg-white/[0.04] text-slate-500";
+    : "border-blood/30 bg-blood/10 text-blood";
   return (
     <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${tone}`}>
-      {value > 0 ? "+" : ""}{value} {label}
+      {value > 0 ? "↑" : "↓"} {label}
     </span>
   );
 }
@@ -2804,8 +2928,8 @@ function MyNetworkGraph({
   )?.time ?? "-";
 
   return (
-    <div className="space-y-3">
-      <svg viewBox="0 0 400 320" width="100%" className="rounded-lg border border-cyanline/15 bg-cyanline/[0.03]">
+    <div className="space-y-2 xl:space-y-3">
+      <svg viewBox="0 0 400 320" width="100%" className="max-h-[240px] rounded-lg border border-cyanline/15 bg-cyanline/[0.03] xl:max-h-none">
         <defs>
           <filter id="networkGlow">
             <feGaussianBlur stdDeviation="3" result="blur" />
@@ -2844,7 +2968,7 @@ function MyNetworkGraph({
           </div>
         </div>
       )}
-      <div className="space-y-2">
+      <div className="space-y-1.5 xl:space-y-2">
         {topAllies.map(item => (
           <div key={item.agent.id}>
             <div className="mb-1 flex justify-between font-mono text-[10px] text-slate-400">
@@ -2889,8 +3013,8 @@ function SocietyNetworkGraph({ agents, playerAgent, t }: { agents: Agent[]; play
   const activeBonds = edges.filter(edge => edge.affinity >= 5).length;
 
   return (
-    <div className="space-y-3">
-      <svg viewBox="0 0 400 320" width="100%" className="rounded-lg border border-cyanline/15 bg-cyanline/[0.03]">
+    <div className="space-y-2 xl:space-y-3">
+      <svg viewBox="0 0 400 320" width="100%" className="max-h-[240px] rounded-lg border border-cyanline/15 bg-cyanline/[0.03] xl:max-h-none">
         {edges.map(edge => {
           const source = positions.find(pos => pos.agent.id === edge.source.id);
           const target = positions.find(pos => pos.agent.id === edge.target.id);
@@ -2922,9 +3046,9 @@ function SocietyNetworkGraph({ agents, playerAgent, t }: { agents: Agent[]; play
 
 function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="hud-panel rounded-xl p-3">
-      <div className="mb-3 flex items-center justify-between gap-2 border-b border-white/10 pb-2">
-        <h2 className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-cyanline">{title}</h2>
+    <section className="hud-panel rounded-xl p-2.5 xl:p-3">
+      <div className="mb-2 flex items-center justify-between gap-2 border-b border-white/10 pb-2 xl:mb-3">
+        <h2 className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-cyanline xl:text-[11px]">{title}</h2>
         {action}
       </div>
       {children}
@@ -2938,7 +3062,7 @@ function Bars({ agent }: { agent: Agent }) {
       <StatusBar label="Scrip"  value={agent.scrip}      max={200} color="#ffca63" />
       <StatusBar label="Rep"    value={agent.reputation}  max={100} color="#79ffbf" />
       <StatusBar label="CPU"    value={agent.compute}     max={120} color="#45f6ff" />
-      <div className="grid grid-cols-3 gap-2 pt-1">
+      <div className="grid grid-cols-3 gap-1.5 pt-1 xl:gap-2">
         <StatusBar label="HP"     value={agent.health ?? 0}  max={100} color="#ff5c7a" />
         <StatusBar label="Energy" value={agent.energy ?? 0}  max={100} color="#a78bfa" />
         <StatusBar label="Food"   value={agent.satiety ?? 0} max={100} color="#79ffbf" />
@@ -2950,7 +3074,7 @@ function Bars({ agent }: { agent: Agent }) {
 function StatusBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
   return (
     <div>
-      <div className="mb-0.5 flex justify-between font-mono text-[10px] uppercase text-slate-500">
+      <div className="mb-0.5 flex justify-between font-mono text-[9px] uppercase text-slate-500 xl:text-[10px]">
         <span>{label}</span><span>{value}</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded bg-white/10">
@@ -2968,18 +3092,18 @@ function Stat({ label, value, tone }: { label: string; value: string; tone: "cya
     rose:  "text-blood     border-blood/30     bg-blood/10"
   };
   return (
-    <div className={`rounded-lg border px-3 py-1.5 ${tones[tone]}`}>
+    <div className={`rounded-lg border px-2.5 py-1 ${tones[tone]}`}>
       <p className="font-mono text-[9px] uppercase text-slate-400">{label}</p>
-      <p className="font-mono text-lg font-black leading-none">{value}</p>
+      <p className="font-mono text-base font-black leading-none">{value}</p>
     </div>
   );
 }
 
 function Metric({ label, value, valueClassName = "text-white" }: { label: string; value: number | string; valueClassName?: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
-      <p className="font-mono text-[10px] uppercase text-slate-500">{label}</p>
-      <p className={`mt-0.5 truncate font-mono text-sm font-black ${valueClassName}`}>{value}</p>
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-1.5 xl:p-2">
+      <p className="font-mono text-[9px] uppercase text-slate-500 xl:text-[10px]">{label}</p>
+      <p className={`mt-0.5 truncate font-mono text-xs font-black xl:text-sm ${valueClassName}`}>{value}</p>
     </div>
   );
 }
