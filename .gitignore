@@ -8,3 +8,5 @@ dist
 *.log
 tsconfig.tsbuildinfo
 .DS_Store
+*.db
+*.db-journal
