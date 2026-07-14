@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>POLIS — AIvilization-style UI Replica</title>
+  <style>
+    :root {
+      --black: #0b1110;
+      --deep: rgba(7, 13, 11, 0.78);
+      --deep-2: rgba(0, 0, 0, 0.52);
+      --white: #f5f5f0;
+      --paper: #f2f2ee;
+      --paper-2: #deded8;
+      --ink: #111;
+      --green: #69ff2d;
+      --dark-green: #10351c;
+      --grass: #1f5c2f;
+      --grass-2: #174525;
+      --tree: #17391f;
+      --tree-hi: #2c6e36;
+      --soil: #8a5430;
+      --road: #7b563c;
+      --water: #2e6b7d;
+      --lime: #b8ff19;
+      --orange: #ff9a18;
+      --blue: #1676e8;
+      --red: #ff5648;
+      --shadow: 0 10px 28px rgba(0,0,0,0.28);
+      --panel-border: rgba(255,255,255,0.78);
+      --font-pixel: "Courier New", "SFMono-Regular", Menlo, monospace;
+      --font-ui: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #151515;
+      font-family: var(--font-ui);
+      color: var(--white);
+    }
+
+    .page {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 28px 16px;
+      background:
+        radial-gradient(circle at 50% 20%, rgba(120,255,110,.12), transparent 30%),
+        #111;
+    }
+
+    .note {
+      width: min(1280px, 100%);
+      margin-bottom: 18px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 14px;
+      padding: 14px 18px;
+      line-height: 1.7;
+      color: rgba(255,255,255,0.82);
+    }
+
+    .note b { color: var(--lime); }
+
+    .screen {
+      position: relative;
+      width: min(1280px, 100%);
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      background: #163d25;
+      box-shadow: 0 28px 90px rgba(0,0,0,0.55);
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.08);
+      image-rendering: pixelated;
+    }
+
+    .screen::after {
+      content: "";
+      pointer-events: none;
+      position: absolute;
+      inset: 0;
+      z-index: 200;
+      background:
+        linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px);
+      background-size: 4px 4px;
+      mix-blend-mode: overlay;
+      opacity: .38;
+    }
+
+    .world {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(0,0,0,.09) 1px, transparent 1px),
+        linear-gradient(rgba(0,0,0,.09) 1px, transparent 1px),
+        radial-gradient(circle at 18% 82%, rgba(0,0,0,.2), transparent 24%),
+        linear-gradient(135deg, var(--grass), var(--grass-2));
+      background-size: 32px 32px, 32px 32px, 100% 100%, 100% 100%;
+      transform-origin: center center;
+    }
+
+    .road {
+      position: absolute;
+      background: var(--road);
+      box-shadow: inset 0 3px 0 rgba(255,255,255,.06), inset 0 -3px 0 rgba(0,0,0,.18);
+      opacity: .95;
+    }
+    .road.h1 { left: -5%; right: -5%; top: 38%; height: 44px; }
+    .road.h2 { left: 10%; right: -5%; top: 81%; height: 36px; }
+    .road.v1 { top: 0; bottom: 0; left: 58%; width: 42px; }
+    .road.v2 { top: 18%; bottom: -5%; left: 25%; width: 34px; }
+
+    .field {
+      position: absolute;
+      background:
+        repeating-linear-gradient(90deg, transparent 0 20px, rgba(0,0,0,.16) 20px 24px),
+        var(--soil);
+      border: 3px solid rgba(70,35,18,.8);
+      box-shadow: inset 0 0 0 2px rgba(255,255,255,.05);
+    }
+    .field.f1 { left: 5%; top: 49%; width: 24%; height: 38%; }
+    .field.f2 { left: 66%; top: 48%; width: 28%; height: 38%; }
+    .field.f3 { left: 64%; top: 5%; width: 16%; height: 20%; }
+
+    .crop {
+      position: absolute;
+      width: 16px; height: 16px;
+      background: linear-gradient(45deg, transparent 40%, #e3c246 40% 60%, transparent 60%), linear-gradient(-45deg, transparent 40%, #3ca43c 40% 60%, transparent 60%);
+      filter: saturate(.9);
+    }
+
+    .tree {
+      position: absolute;
+      width: 44px;
+      height: 58px;
+      transform: translate(-50%, -50%);
+      z-index: 2;
+    }
+    .tree::before {
+      content: "";
+      position: absolute;
+      left: 17px; top: 34px;
+      width: 10px; height: 22px;
+      background: #613b22;
+      box-shadow: inset -2px 0 rgba(0,0,0,.18);
+    }
+    .tree::after {
+      content: "";
+      position: absolute;
+      left: 3px; top: 0;
+      width: 38px; height: 42px;
+      border-radius: 8px;
+      background:
+        radial-gradient(circle at 26% 28%, #335f2f 0 4px, transparent 5px),
+        radial-gradient(circle at 65% 36%, #315f2e 0 5px, transparent 6px),
+        radial-gradient(circle at 48% 64%, #438139 0 4px, transparent 5px),
+        var(--tree);
+      box-shadow: inset 0 -6px rgba(0,0,0,.18), 0 8px 0 rgba(0,0,0,.12);
+    }
+    .apple::after {
+      background:
+        radial-gradient(circle at 28% 24%, #e04435 0 3px, transparent 4px),
+        radial-gradient(circle at 72% 42%, #e04435 0 3px, transparent 4px),
+        radial-gradient(circle at 45% 66%, #e04435 0 3px, transparent 4px),
+        var(--tree-hi);
+    }
+
+    .building {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      z-index: 5;
+      text-align: center;
+    }
+    .building .roof {
+      position: absolute;
+      left: 3px; top: -12px;
+      width: 76px; height: 20px;
+      background: #7a3630;
+      transform: skewX(-18deg);
+      border: 3px solid #2e2120;
+      box-shadow: inset 0 -4px rgba(0,0,0,.18);
+    }
+    .building .body {
+      position: relative;
+      width: 82px; height: 58px;
+      background: #b9b9ac;
+      border: 4px solid #2e2e2a;
+      box-shadow: 0 8px 0 rgba(0,0,0,.22), inset 0 -7px rgba(0,0,0,.08);
+    }
+    .building .door {
+      position: absolute;
+      bottom: 0; left: 50%; transform: translateX(-50%);
+      width: 16px; height: 24px; background: #4b342c;
+    }
+    .building .sign {
+      display: inline-block;
+      margin-top: 8px;
+      min-width: 84px;
+      padding: 5px 9px;
+      background: rgba(255,255,255,.86);
+      color: #222;
+      border: 2px solid rgba(0,0,0,.25);
+      font-family: var(--font-pixel);
+      font-weight: 900;
+      font-size: 14px;
+      box-shadow: 3px 4px 0 rgba(0,0,0,.18);
+    }
+    .mine .body { background: #7b6a62; }
+    .school .roof { background: #2f5793; }
+    .office .roof { background: #6a6a6a; }
+    .home .roof { background: #3f6442; }
+
+    .npc {
+      position: absolute;
+      width: 30px; height: 42px;
+      transform: translate(-50%, -50%);
+      z-index: 20;
+    }
+    .npc .head {
+      position: absolute; left: 6px; top: 0;
+      width: 18px; height: 18px;
+      background: #d9a176;
+      border: 2px solid #302322;
+      box-shadow: inset 0 -3px rgba(0,0,0,.14);
+    }
+    .npc .hair { position:absolute; left:4px; top:-2px; width:22px; height:8px; background:#493127; border:2px solid #302322; }
+    .npc .body {
+      position: absolute; left: 5px; top: 18px;
+      width: 20px; height: 20px;
+      background: #6687bd;
+      border: 2px solid #302322;
+      box-shadow: inset 0 -4px rgba(0,0,0,.15);
+    }
+    .npc .leg1, .npc .leg2 { position:absolute; top:37px; width:7px; height:7px; background:#2d2d34; border:1px solid #1a1a1c; }
+    .npc .leg1 { left:6px; } .npc .leg2 { right:6px; }
+    .npc.pink .body { background:#d66d8d; }
+    .npc.green .body { background:#61a96b; }
+    .npc.orange .body { background:#ce8556; }
+    .npc.purple .body { background:#786fd0; }
+
+    .speech {
+      position: absolute;
+      z-index: 35;
+      min-width: 118px;
+      padding: 8px 12px;
+      background: rgba(245,245,240,.92);
+      color: #1f1f1f;
+      border: 1px solid rgba(0,0,0,.2);
+      box-shadow: 3px 4px 0 rgba(0,0,0,.22);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .speech::after {
+      content: "";
+      position: absolute;
+      left: 18px; bottom: -8px;
+      border-width: 8px 8px 0 0;
+      border-style: solid;
+      border-color: rgba(245,245,240,.92) transparent transparent transparent;
+    }
+    .speech small { display:block; font-size:10px; color:#666; margin-bottom:2px; }
+
+    .top-left {
+      position: absolute;
+      left: 10px; top: 10px;
+      z-index: 80;
+      display: grid;
+      grid-template-columns: 82px 230px;
+      gap: 8px;
+      align-items: start;
+    }
+    .avatar-card {
+      position: relative;
+      width: 82px; height: 82px;
+      background: rgba(255,255,255,.92);
+      border: 4px solid rgba(255,255,255,.9);
+      box-shadow: var(--shadow);
+    }
+    .avatar-card .face {
+      position: absolute; left: 18px; top: 18px;
+      width: 44px; height: 44px;
+      background: #d9a176;
+      border: 3px solid #2d2323;
+    }
+    .avatar-card .face::before {
+      content:""; position:absolute; left:-3px; top:-8px; width:46px; height:15px; background:#35445c; border:3px solid #2d2323;
+    }
+    .avatar-card .face::after {
+      content:""; position:absolute; left:10px; top:16px; width:5px; height:5px; background:#222; box-shadow:18px 0 #222;
+    }
+    .stats {
+      padding: 8px 10px 9px;
+      background: var(--deep);
+      border-radius: 0 0 4px 4px;
+      box-shadow: var(--shadow);
+    }
+    .name-line {
+      display:flex; align-items:center; gap:8px;
+      margin-bottom: 6px;
+      font-family: var(--font-pixel);
+      font-size: 16px; font-weight: 900;
+    }
+    .stat-line { display:flex; align-items:center; gap:8px; height:18px; margin:2px 0; }
+    .stat-icon { width:18px; text-align:center; font-size:14px; }
+    .stat-bar {
+      flex:1; height:7px; background:rgba(255,255,255,.18); border-radius:999px; overflow:hidden;
+    }
+    .stat-fill { height:100%; border-radius:999px; box-shadow:0 0 8px currentColor; }
+    .wallet { display:flex; gap:20px; margin-top:7px; font-size:16px; font-weight:900; }
+
+    .invite {
+      position:absolute; left: 8px; top: 128px; z-index:80;
+      width: 120px; height: 54px;
+      color: white; font-weight:900; text-align:center;
+    }
+    .invite .cards { position:absolute; left:18px; top:0; font-size:32px; transform:rotate(-12deg); filter:drop-shadow(2px 3px 0 rgba(0,0,0,.4)); }
+    .invite .tag { position:absolute; left:0; bottom:0; width:100%; padding:4px; background:rgba(0,0,0,.55); font-size:12px; }
+
+    .mode-hud {
+      position:absolute; left:50%; top:16px; transform:translateX(-50%);
+      z-index:90;
+      display:flex; flex-direction:column; align-items:center; gap:7px;
+    }
+    .mode-pill {
+      height:52px; min-width:132px; border-radius:18px;
+      background:rgba(255,255,255,.94); color:#111;
+      display:grid; place-items:center; font-weight:900; font-size:13px;
+      box-shadow: var(--shadow);
+      border:1px solid rgba(0,0,0,.08);
+    }
+    .mode-pill .icon { font-size:22px; line-height:1; }
+    .mode-controls {
+      height:28px; padding:0 9px; display:flex; align-items:center; gap:14px;
+      background:rgba(0,0,0,.72); border-radius:999px;
+      color:white; font-size:14px; box-shadow:var(--shadow);
+    }
+    .mode-controls button {
+      border:0; background:transparent; color:white; font-size:14px; padding:0; cursor:pointer;
+    }
+
+    .action-hud {
+      position:absolute; left:57%; top:16px; z-index:90;
+      min-width:190px;
+      background:rgba(0,0,0,.63);
+      border-radius:3px;
+      padding:7px 12px 8px;
+      box-shadow:var(--shadow);
+    }
+    .action-title { font-size:13px; font-weight:900; display:flex; justify-content:space-between; gap:12px; }
+    .progress { margin-top:5px; height:7px; background:rgba(255,255,255,.18); overflow:hidden; border-radius:999px; }
+    .progress span { display:block; width:62%; height:100%; background:var(--green); box-shadow:0 0 8px var(--green); }
+    .action-time { font-size:10px; color:rgba(255,255,255,.7); text-align:right; margin-top:2px; font-family:var(--font-pixel); }
+    .like-col { position:absolute; left: calc(57% + 205px); top: 23px; z-index:90; display:grid; gap:11px; font-size:18px; }
+
+    .day-hud {
+      position:absolute; right:26px; top:18px; z-index:90;
+      text-align:center; font-family:var(--font-pixel);
+      filter:drop-shadow(0 3px 0 rgba(0,0,0,.45));
+    }
+    .day-hud .calendar { font-size:40px; line-height:1; }
+    .day-hud .day { color:var(--green); font-size:18px; font-weight:900; letter-spacing:2px; }
+    .day-hud .num { font-size:40px; font-weight:900; line-height:1; }
+    .day-hud .time { display:inline-block; margin-top:3px; padding:4px 16px; background:rgba(0,0,0,.52); font-size:14px; }
+
+    .right-toolbar {
+      position:absolute; right:22px; top:174px; z-index:85;
+      display:grid; gap:14px;
+    }
+    .lv { color:white; text-align:right; font-size:22px; font-weight:900; font-family:var(--font-pixel); }
+    .tool-row { position:relative; height:48px; width:116px; }
+    .dots {
+      position:absolute; left:0; top:2px; width:84px; height:44px;
+      background-image: radial-gradient(circle, rgba(255,255,255,.9) 0 3px, transparent 4px);
+      background-size:10px 10px;
+      opacity:.92;
+    }
+    .tool {
+      position:absolute; right:0; top:0;
+      width:52px; height:48px; background:rgba(245,245,240,.9); color:#111;
+      display:grid; place-items:center; font-size:27px; font-weight:900;
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 12% 50%);
+      box-shadow:4px 5px 0 rgba(0,0,0,.25);
+    }
+
+    .bottom-chat {
+      position:absolute; left:50%; bottom:24px; transform:translateX(-50%);
+      z-index:90; display:flex; align-items:center; gap:8px;
+    }
+    .chat-menu {
+      width:34px; height:30px; border-radius:10px; background:rgba(0,0,0,.58); display:grid; place-items:center; border:1px solid rgba(255,255,255,.35);
+      font-size:18px;
+    }
+    .chat-input {
+      width:230px; height:28px; border-radius:12px; background:rgba(255,255,255,.92); border:2px solid rgba(0,0,0,.38); color:#222; display:flex; align-items:center; padding:0 12px; font-size:12px;
+    }
+    .ticket { font-size:30px; transform:rotate(-18deg); filter:drop-shadow(2px 2px 0 rgba(0,0,0,.38)); }
+    .send { height:28px; min-width:55px; border-radius:999px; background:var(--green); color:#072106; font-weight:900; display:grid; place-items:center; box-shadow:0 3px 0 rgba(0,0,0,.36); }
+
+    .minimap {
+      position:absolute; right:20px; bottom:26px; z-index:90;
+      width:80px; height:74px; filter:drop-shadow(0 5px 0 rgba(0,0,0,.38));
+    }
+    .map-pin { position:absolute; right:3px; top:-8px; color:#ffab12; font-size:42px; }
+    .map-paper { position:absolute; bottom:0; right:0; width:58px; height:62px; background:linear-gradient(90deg, var(--blue) 0 38%, white 38% 100%); border:2px solid rgba(255,255,255,.8); clip-path:polygon(0 0, 30% 10%, 60% 0, 100% 10%, 100% 100%, 60% 90%, 30% 100%, 0 90%); }
+
+    .left-feed {
+      position:absolute; left:8px; top:206px; z-index:70;
+      width:300px; max-height:340px; overflow:hidden;
+      color:rgba(255,255,255,.78); font-size:13px; line-height:1.35;
+      text-shadow:1px 2px 0 rgba(0,0,0,.7);
+    }
+    .feed-line { margin-bottom:10px; }
+    .feed-line b { color:#c7ff7e; }
+
+    .guide-tab {
+      position:absolute; left:0; bottom:8px; z-index:95; width:38px; height:42px; background:white; color:#111; display:grid; place-items:center; font-weight:900; font-family:var(--font-pixel);
+      box-shadow:4px 4px 0 rgba(0,0,0,.28);
+    }
+
+    .data-overlay {
+      position:absolute; inset:0; z-index:120; display:none;
+      background:rgba(4, 12, 9, .58);
+      backdrop-filter: blur(1px);
+    }
+    .screen.data .data-overlay { display:block; }
+    .screen.data .mode-pill { background:#111; color:white; }
+    .screen.data .mode-pill .label::after { content:" MODE"; }
+
+    .rank-panel {
+      position:absolute; left:0; top:132px; bottom:10px; width:238px; background:rgba(0,0,0,.82); box-shadow:var(--shadow); padding:10px; border-radius:0 14px 14px 0;
+    }
+    .tabs { display:flex; height:26px; margin-bottom:10px; }
+    .tab { flex:1; background:#d8d8d8; color:#222; font-weight:900; font-size:12px; display:grid; place-items:center; border-radius:10px 10px 0 0; }
+    .tab.active { background:white; }
+    .rank-item { display:grid; grid-template-columns:22px 38px 1fr 18px; gap:6px; align-items:center; min-height:42px; margin-bottom:8px; background:#c9c9c9; color:#111; padding:5px; border-radius:4px; }
+    .rank-index { width:21px; height:32px; background:var(--green); display:grid; place-items:center; font-weight:900; }
+    .rank-avatar { width:34px; height:34px; background:#e0b081; border:2px solid #333; }
+    .rank-text b { display:block; font-size:12px; } .rank-text span { font-size:10px; color:#333; }
+    .play { width:18px; height:18px; border-radius:50%; background:white; color:#111; display:grid; place-items:center; font-size:10px; }
+    .price-panel { position:absolute; left:8px; bottom:8px; width:230px; height:184px; background:rgba(0,0,0,.82); border-radius:0 0 12px 12px; padding:12px; color:white; }
+    .price-row { display:grid; grid-template-columns:28px 1fr; margin-bottom:13px; font-size:13px; }
+    .price-row b { text-align:right; }
+
+    .center-banner { position:absolute; left:50%; top:142px; transform:translateX(-50%); width:850px; height:86px; background:white; color:#111; border:4px solid #111; border-bottom:8px solid var(--lime); display:grid; place-items:center; font-size:32px; font-weight:900; letter-spacing:5px; box-shadow:var(--shadow); }
+    .dialogues { position:absolute; left:35%; top:315px; width:390px; display:grid; gap:10px; }
+    .d-bubble { background:white; color:#111; border-radius:10px; padding:13px 18px; font-weight:900; box-shadow:3px 4px 0 rgba(0,0,0,.28); }
+    .d-bubble.mine { background:#13e4a8; transform:translateX(-80px); }
+    .agent-carousel { position:absolute; left:260px; right:250px; bottom:12px; display:flex; gap:8px; overflow:hidden; }
+    .agent-card { width:70px; height:96px; flex:0 0 auto; background:#737373; border-radius:8px; display:grid; place-items:center; box-shadow:4px 4px 0 rgba(0,0,0,.24); color:white; font-size:10px; text-align:center; padding:5px; }
+    .agent-card .mini-face { width:40px; height:40px; background:#d9a176; border:3px solid #222; margin-bottom:5px; }
+    .think-panel { position:absolute; right:0; top:0; bottom:0; width:230px; background:rgba(0,0,0,.65); padding:16px; font-size:14px; line-height:1.35; color:white; }
+    .think-panel h4 { margin:0 0 12px; color:white; }
+    .think-panel b { color:#ffec8a; }
+
+    .mode-toggle {
+      position:absolute; left:50%; top:94px; transform:translateX(-50%); z-index:180; display:flex; gap:10px;
+    }
+    .mode-toggle button {
+      border:0; border-radius:999px; padding:8px 14px; font-weight:900; background:rgba(255,255,255,.9); color:#111; box-shadow:3px 4px 0 rgba(0,0,0,.24); cursor:pointer;
+    }
+    .mode-toggle button.active { background:var(--lime); }
+
+    .tutorial {
+      position:absolute; left:360px; top:70px; z-index:100;
+      background:white; color:#111; border:2px solid rgba(0,0,0,.2); box-shadow:4px 4px 0 rgba(0,0,0,.24); padding:10px 14px; min-width:210px; font-weight:900; display:flex; justify-content:space-between; gap:16px; align-items:center;
+    }
+    .ok { background:#1a7cff; color:white; padding:5px 18px; border-radius:2px; }
+
+    @media(max-width:900px){
+      .screen{aspect-ratio:auto;height:900px;}
+      .right-toolbar,.day-hud,.action-hud,.like-col,.left-feed,.bottom-chat,.minimap{transform:scale(.8);transform-origin:top right;}
+      .left-panel,.right-panel,.bottom-panel{display:none;}
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="note">
+      <b>复刻重点：</b>不是精致 3D 小岛，而是 2D 像素小镇 + 密集 HUD。核心元素包括：左上角色状态、顶部 Game/Data Mode、当前行动进度、右上 Day/Time、右侧竖向功能栏、地图里的建筑/农田/树/角色气泡、左侧滚动事件、底部聊天输入和 Prompt Ticket，以及 Data Mode 的排行榜/价格/关系/对话层。
+    </section>
+
+    <section class="screen" id="screen">
+      <div class="world">
+        <div class="road h1"></div><div class="road h2"></div><div class="road v1"></div><div class="road v2"></div>
+        <div class="field f1" id="field1"></div><div class="field f2" id="field2"></div><div class="field f3" id="field3"></div>
+
+        <div class="building school" style="left:47%; top:23%;"><div class="roof"></div><div class="body"><div class="door"></div></div><span class="sign">SCHOOL</span></div>
+        <div class="building mine" style="left:70%; top:31%;"><div class="roof"></div><div class="body"><div class="door"></div></div><span class="sign">MINE</span></div>
+        <div class="building office" style="left:79%; top:79%;"><div class="roof"></div><div class="body"><div class="door"></div></div><span class="sign">OFFICE</span></div>
+        <div class="building home" style="left:37%; top:75%;"><div class="roof"></div><div class="body"><div class="door"></div></div><span class="sign">HOME</span></div>
+
+        <div class="tree apple" style="left:17%; top:25%;"></div><div class="tree apple" style="left:25%; top:31%;"></div><div class="tree apple" style="left:32%; top:20%;"></div>
+        <div class="tree" style="left:12%; top:65%;"></div><div class="tree" style="left:16%; top:78%;"></div><div class="tree apple" style="left:83%; top:26%;"></div><div class="tree" style="left:91%; top:20%;"></div><div class="tree apple" style="left:89%; top:58%;"></div>
+
+        <div class="npc pink" style="left:42%; top:44%;"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="leg1"></div><div class="leg2"></div></div>
+        <div class="npc green" style="left:55%; top:45%;"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="leg1"></div><div class="leg2"></div></div>
+        <div class="npc orange" style="left:31%; top:42%;"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="leg1"></div><div class="leg2"></div></div>
+        <div class="npc purple" style="left:65%; top:70%;"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="leg1"></div><div class="leg2"></div></div>
+        <div class="npc" style="left:49%; top:68%;"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="leg1"></div><div class="leg2"></div></div>
+
+        <div class="speech" style="left:49%; top:34%;"><small>Nova 🍎🔨</small>craft apple</div>
+        <div class="speech" style="left:34%; top:50%;"><small>Lex</small>OK, send me to the mine</div>
+        <div class="speech" style="left:63%; top:55%;"><small>Mira</small>market price changed</div>
+      </div>
+
+      <div class="top-left">
+        <div class="avatar-card"><div class="face"></div></div>
+        <div class="stats">
+          <div class="name-line"><span>chaox</span><span style="font-size:11px;color:var(--green)">Lv3</span></div>
+          <div class="stat-line"><span class="stat-icon">♥</span><div class="stat-bar"><div class="stat-fill" style="width:83%; background:#7cff5d; color:#7cff5d"></div></div><b>83</b></div>
+          <div class="stat-line"><span class="stat-icon">⚡</span><div class="stat-bar"><div class="stat-fill" style="width:60%; background:#ffb13a; color:#ffb13a"></div></div><b>60</b></div>
+          <div class="stat-line"><span class="stat-icon">●</span><div class="stat-bar"><div class="stat-fill" style="width:58%; background:#8bd6ff; color:#8bd6ff"></div></div><b>58</b></div>
+          <div class="wallet"><span>◎ 2.59k</span><span>▰ 355</span></div>
+        </div>
+      </div>
+
+      <div class="invite"><div class="cards">🃏</div><div class="tag">INVITE</div></div>
+
+      <div class="mode-hud">
+        <div class="mode-pill"><div><div class="icon">🎮</div><div class="label">GAME</div></div></div>
+        <div class="mode-controls"><button>⟳</button><button>▶</button><button>✣</button></div>
+      </div>
+
+      <div class="action-hud">
+        <div class="action-title"><span>craft apple</span><span>x2</span></div>
+        <div class="progress"><span></span></div>
+        <div class="action-time">10Min13s</div>
+      </div>
+      <div class="like-col"><span>👍</span><span>👎</span></div>
+
+      <div class="day-hud"><div class="calendar">▦</div><div class="day">DAY</div><div class="num">51</div><div class="time">17:42</div></div>
+
+      <div class="right-toolbar">
+        <div class="lv">Lv3</div>
+        <div class="tool-row"><div class="dots"></div><div class="tool">⌂</div></div>
+        <div class="tool-row"><div class="dots"></div><div class="tool">▰</div></div>
+        <div class="tool-row"><div class="dots"></div><div class="tool">▣</div></div>
+        <div class="tool-row"><div class="dots"></div><div class="tool">☷</div></div>
+        <div class="tool-row"><div class="dots"></div><div class="tool">?</div></div>
+      </div>
+
+      <div class="left-feed">
+        <div class="feed-line"><b>World:</b> harvest apple prices are rising.</div>
+        <div class="feed-line"><b>Nova:</b> I need a collaborator for market analysis.</div>
+        <div class="feed-line"><b>System:</b> weak tie became operational trust.</div>
+        <div class="feed-line"><b>Contract:</b> Lex accepted a mining task with reward 120 CC.</div>
+        <div class="feed-line"><b>Diary:</b> “I learned that selling apples can fund my next plan.”</div>
+      </div>
+
+      <div class="tutorial">Send a prompt to guide this agent <span class="ok">OK</span></div>
+
+      <div class="bottom-chat"><div class="chat-menu">⌨</div><div class="chat-input">Enter text...</div><div class="ticket">🎟️</div><div class="send">发送</div></div>
+      <div class="minimap"><div class="map-paper"></div><div class="map-pin">📍</div></div>
+      <div class="guide-tab">EN<br><small>Guide</small></div>
+
+      <div class="data-overlay">
+        <div class="rank-panel">
+          <div class="tabs"><div class="tab active">ORG</div><div class="tab">AGENT</div></div>
+          <div class="rank-item"><div class="rank-index">1</div><div class="rank-avatar"></div><div class="rank-text"><b>Dataghost</b><span>234357.00 $</span></div><div class="play">▶</div></div>
+          <div class="rank-item"><div class="rank-index">2</div><div class="rank-avatar"></div><div class="rank-text"><b>huhulu</b><span>2225631.00 $</span></div><div class="play">▶</div></div>
+          <div class="rank-item"><div class="rank-index">3</div><div class="rank-avatar"></div><div class="rank-text"><b>labubu</b><span>2034701.00 $</span></div><div class="play">▶</div></div>
+          <div class="rank-item"><div class="rank-index">4</div><div class="rank-avatar"></div><div class="rank-text"><b>suolong</b><span>1949616.00 $</span></div><div class="play">▶</div></div>
+          <div class="rank-item"><div class="rank-index">5</div><div class="rank-avatar"></div><div class="rank-text"><b>Pixelmask</b><span>178114.00 $</span></div><div class="play">▶</div></div>
+        </div>
+        <div class="price-panel">
+          <div class="price-row"><span>🍎</span><b>31.217 $</b></div>
+          <div class="price-row"><span>🪵</span><b>243.52 $</b></div>
+          <div class="price-row"><span>🧱</span><b>668.34 $</b></div>
+          <div class="price-row"><span>📦</span><b>262.03 $</b></div>
+          <div class="price-row"><span>🥖</span><b>143.08 $</b></div>
+        </div>
+        <div class="center-banner">Data Mode: 解读关系、价格与排名</div>
+        <div class="dialogues"><div class="d-bubble">Hi, Nick! I need some money.</div><div class="d-bubble mine">You can sell the apples.</div><div class="d-bubble">Will you buy my apples?</div></div>
+        <div class="agent-carousel"><div class="agent-card"><div class="mini-face"></div>Ebony</div><div class="agent-card"><div class="mini-face"></div>Jack</div><div class="agent-card"><div class="mini-face"></div>Cybble</div><div class="agent-card"><div class="mini-face"></div>Nick</div><div class="agent-card"><div class="mini-face"></div>Geastar</div><div class="agent-card"><div class="mini-face"></div>Zhangyao</div><div class="agent-card"><div class="mini-face"></div>Rainbow</div><div class="agent-card"><div class="mini-face"></div>Lucky</div></div>
+        <div class="think-panel"><h4>Deep Think #266</h4><p><b>Market Intelligence:</b> I’m strategically analyzing apple price and trust relations.</p><p><b>Objective:</b> sell enough apples while keeping health and energy stable.</p></div>
+      </div>
+
+      <div class="mode-toggle"><button class="active" onclick="setMode('game', this)">GAME MODE</button><button onclick="setMode('data', this)">DATA MODE</button></div>
+    </section>
+  </main>
+
+  <script>
+    function setMode(mode, btn) {
+      const screen = document.getElementById('screen');
+      if (mode === 'data') screen.classList.add('data');
+      else screen.classList.remove('data');
+      document.querySelectorAll('.mode-toggle button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    }
+
+    function scatterCrops() {
+      const fields = [document.getElementById('field1'), document.getElementById('field2'), document.getElementById('field3')];
+      fields.forEach((field, idx) => {
+        const cols = idx === 2 ? 6 : 9;
+        const rows = idx === 2 ? 4 : 7;
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) {
+            const crop = document.createElement('div');
+            crop.className = 'crop';
+            crop.style.left = (12 + x * 10) + '%';
+            crop.style.top = (10 + y * 12) + '%';
+            crop.style.opacity = String(0.6 + Math.random() * 0.35);
+            if ((x + y + idx) % 3 === 0) crop.style.filter = 'hue-rotate(55deg) saturate(.8)';
+            field.appendChild(crop);
+          }
+        }
+      });
+    }
+    scatterCrops();
+  </script>
+</body>
+</html>
