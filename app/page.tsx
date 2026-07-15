@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type Agent = {
   id: string;
@@ -61,6 +62,10 @@ export default function HomePage() {
   return (
     <main style={{ padding: "2rem", fontFamily: "monospace" }}>
       <h1>Polis — Phase 0</h1>
+
+      <p>
+        <Link href="/agent">My Agent</Link>
+      </p>
 
       <section style={{ margin: "1.5rem 0" }}>
         <div style={{ fontSize: "2rem" }}>Tick: {state.tick}</div>
