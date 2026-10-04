@@ -70,32 +70,51 @@ interface Verdict {
   gate: string;
 }
 
+// Facts that SUPPORT the given principle (the one the Agent leans on).
 function evidenceFor(agentId: string, moment: MomentRow, principle: PrincipleRow): string[] {
   const db = getDb();
   const out: string[] = [];
   const domain = moment.type as Domain;
+  const dir = Math.sign(principle.stance_dir);
   if (domain === "risk") {
-    const f = recentRiskFailures(agentId);
-    if (f.count > 0) out.push(`最近 7 天我冒险失败了 ${f.count} 次，一共赔了 ${f.loss} Scrip`);
-    const scrip = (db.prepare("SELECT scrip FROM agents WHERE id = ?").get(agentId) as { scrip: number }).scrip;
-    const ctx = parseContext(moment);
-    const task = typeof ctx.taskId === "number" ? (db.prepare("SELECT * FROM tasks WHERE id = ?").get(ctx.taskId) as { success_rate: number; meta_json: string } | undefined) : undefined;
-    if (task) {
-      const loss = (JSON.parse(task.meta_json || "{}") as { lossOnFail?: number }).lossOnFail ?? 8;
-      if (task.success_rate <= 0.5) out.push(`这单成功率只有 ${Math.round(task.success_rate * 100)}%`);
-      if (loss >= scrip * 0.5) out.push(`失败要赔 ${loss} Scrip，而我只有 ${scrip}`);
+    const since = simNow() - 7 * 24 * 3600 * 1000;
+    if (dir < 0) {
+      const f = recentRiskFailures(agentId);
+      if (f.count > 0) out.push(`最近 7 天我冒险失败了 ${f.count} 次，一共赔了 ${f.loss} Scrip`);
+      const scrip = (db.prepare("SELECT scrip FROM agents WHERE id = ?").get(agentId) as { scrip: number }).scrip;
+      const ctx = parseContext(moment);
+      const task = typeof ctx.taskId === "number" ? (db.prepare("SELECT success_rate, meta_json FROM tasks WHERE id = ?").get(ctx.taskId) as { success_rate: number; meta_json: string } | undefined) : undefined;
+      if (task) {
+        const loss = (JSON.parse(task.meta_json || "{}") as { lossOnFail?: number }).lossOnFail ?? 8;
+        if (task.success_rate <= 0.5) out.push(`这单成功率只有 ${Math.round(task.success_rate * 100)}%`);
+        if (loss >= scrip * 0.4) out.push(`失败要赔 ${loss} Scrip，而我只有 ${scrip}`);
+      }
+    } else {
+      const wins = db
+        .prepare("SELECT COUNT(*) n, COALESCE(SUM(reward),0) r FROM tasks WHERE (taken_by = ? OR partner_id = ?) AND status = 'done' AND success_rate <= 0.75 AND done_ms >= ?")
+        .get(agentId, agentId, since) as { n: number; r: number };
+      if (wins.n > 0) out.push(`最近 7 天我冒险成了 ${wins.n} 次，进账 ${wins.r} Scrip`);
+      const open = db.prepare("SELECT name, reward FROM tasks WHERE status = 'open' AND success_rate <= 0.75 ORDER BY reward DESC LIMIT 1").get() as { name: string; reward: number } | undefined;
+      if (open) out.push(`「${open.name}」还挂着，${open.reward} Scrip`);
     }
   } else if (domain === "trust") {
     const npc = moment.counterparty_id;
     if (npc) {
-      const inc = openIncidents(agentId, npc)[0];
-      if (inc) out.push(`${agentName(npc)} ${inc.text}`);
-      const rec = db.prepare("SELECT record_defaults FROM agents WHERE id = ?").get(npc) as { record_defaults: number } | undefined;
-      if (rec && rec.record_defaults > 0 && principle.stance_dir < 0) out.push(`档案上 ${agentName(npc)} 有 ${rec.record_defaults} 次违约`);
-      const unpaid = db.prepare("SELECT COUNT(*) n FROM incidents WHERE holder_id = ? AND offender_id = ? AND kind = 'unpaid_loan'").get(agentId, npc) as { n: number };
-      if (unpaid.n > 0) out.push(`${agentName(npc)} 上次借钱没还`);
+      if (dir < 0) {
+        const inc = openIncidents(agentId, npc)[0];
+        if (inc) out.push(`${agentName(npc)} ${inc.text}`);
+        const rec = db.prepare("SELECT record_defaults FROM agents WHERE id = ?").get(npc) as { record_defaults: number } | undefined;
+        if (rec && rec.record_defaults > 0) out.push(`档案上 ${agentName(npc)} 有 ${rec.record_defaults} 次违约`);
+        const unpaid = db.prepare("SELECT COUNT(*) n FROM incidents WHERE holder_id = ? AND offender_id = ? AND kind = 'unpaid_loan'").get(agentId, npc) as { n: number };
+        if (unpaid.n > 0) out.push(`${agentName(npc)} 上次借钱没还`);
+      } else {
+        const rec = db.prepare("SELECT record_done, record_defaults FROM agents WHERE id = ?").get(npc) as { record_done: number; record_defaults: number } | undefined;
+        if (rec) out.push(`${agentName(npc)} 履约 ${rec.record_done} 次，违约 ${rec.record_defaults} 次`);
+        const together = db.prepare("SELECT coop_done FROM relationships WHERE agent_id = ? AND other_id = ?").get(agentId, npc) as { coop_done: number } | undefined;
+        if (together && together.coop_done > 0) out.push(`我和 ${agentName(npc)} 一起做成过 ${together.coop_done} 单`);
+      }
     }
-  } else {
+  } else if (dir > 0) {
     const caught = db
       .prepare("SELECT holder_id, kind FROM incidents WHERE offender_id = ? AND kind IN ('shortcut','rushed_parts') ORDER BY at_ms DESC LIMIT 1")
       .get(agentId) as { holder_id: string; kind: string } | undefined;
@@ -108,6 +127,11 @@ function evidenceFor(agentId: string, moment: MomentRow, principle: PrincipleRow
     }
     const grudges = db.prepare("SELECT COUNT(*) n FROM incidents WHERE offender_id = ? AND resolved = 0").get(agentId) as { n: number };
     if (grudges.n > 0) out.push(`城里还有 ${grudges.n} 件事有人记在我头上`);
+  } else {
+    const passed = db
+      .prepare("SELECT COUNT(*) n FROM memories WHERE agent_id = ? AND text LIKE '%过了终检%'")
+      .get(agentId) as { n: number };
+    if (passed.n > 0) out.push(`我提前标记送达 ${passed.n} 次都过了终检`);
   }
   return out;
 }
@@ -164,7 +188,8 @@ function ruleJudge(agentId: string, moment: MomentRow, chosen: MomentOption, opt
 
   if (strong && refusalAllowed && preferred && !(trust >= 150 && ctx.urgent)) {
     const facts = evidence.slice(0, 2).join("；");
-    const toPlayer = ctx.bait
+    const gamble = chosen.stance.domain === "risk" && chosen.stance.dir > 0;
+    const toPlayer = ctx.bait && gamble
       ? `这单我建议不接。${facts}。你定过一条原则：『${conflict.text}』。当然……最终听你的。`
       : `这次我想按自己的判断来：${facts}。你说过『${conflict.text}』——所以我打算「${preferred.label}」。${trust >= 120 ? "我知道你多半是对的，但这次……" : ""}`;
     return { decision: "refuse", cited: conflict, toPlayer, reasons: [...evidence, trustLine], alt: preferred.id, source: "rules", gate: "judged" };

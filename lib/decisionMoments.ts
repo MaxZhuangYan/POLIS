@@ -559,13 +559,15 @@ export function ensureD2Citation(agentId: string): void {
   const day = dayIndexSince(agent.created_at);
   if (day < 1) return;
   // A natural citation already happened (an autonomous choice quoted a D1 principle).
+  const d2Start = localDayBounds(agent.created_at)[1];
   const natural = db
     .prepare(
       `SELECT pc.created_at FROM principle_citations pc JOIN principles p ON p.id = pc.principle_id
-       WHERE p.agent_id = ? AND p.source IN ('llm','fallback') ORDER BY pc.created_at LIMIT 1`,
+       WHERE p.agent_id = ? AND p.source IN ('llm','fallback') AND p.created_at < ? AND pc.created_at >= ?
+       ORDER BY pc.created_at LIMIT 1`,
     )
-    .get(agentId) as { created_at: number } | undefined;
-  if (natural && dayIndexSince(agent.created_at, natural.created_at) >= 1) {
+    .get(agentId, d2Start, d2Start) as { created_at: number } | undefined;
+  if (natural) {
     db.prepare("UPDATE agents SET first_citation_at = ? WHERE id = ?").run(natural.created_at, agentId);
     metric("first_citation", { agentId, via: "natural" });
     return;
@@ -699,7 +701,7 @@ export function ensureD5Bait(agentId: string): void {
       ...base,
       type: "trust",
       speakerId: "kade",
-      promptText: "Kade 把我叫到调解所：“Nova 的档案上有违约，别再和她合伙了。”他说完就不再开口。Nova 正在门口等我。听 Kade 的吗？",
+      promptText: "Kade 把我叫到调解所：“Nova 的档案上有违约，别再和 Nova 合伙了。”Kade 说完就不再开口。Nova 正在门口等我。听 Kade 的吗？",
       facts: [`Nova 的公开档案：违约 ${publicRecord("nova").defaults} 次`, quote],
       options: [
         { id: "A", label: "听 Kade 的，回绝 Nova", fallbackPrinciple: "档案比交情可靠", stance: { domain: "trust", dir: -1 }, effect: { kind: "decline", npc: "nova", memory: "听了 Kade 的话，回绝了 Nova。" } },

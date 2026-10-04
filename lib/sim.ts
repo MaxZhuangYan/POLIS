@@ -47,6 +47,7 @@ import {
   type PlanItem,
 } from "./decisionMoments";
 import { maybeRunDistillationBatch } from "./distillation";
+import { llmAvailable } from "./llm";
 import { activeDirective } from "./notes";
 import { writeNightlyPostcard } from "./postcards";
 import type { LocationId } from "./types";
@@ -274,6 +275,21 @@ function startNextQueued(agentId: string): boolean {
   if (a.activity === "sleeping") return false;
   const plan = readPlan(a);
   const queue = plan.queue ?? [];
+  // A coop whose partner is still busy must not block solo work queued
+  // behind it: do the next startable solo job and come back to the coop.
+  if (queue.length > 1) {
+    const firstSolo = queue.findIndex((q) => getTask(q.taskId)?.mode !== "coop");
+    const head = getTask(queue[0].taskId);
+    if (head?.mode === "coop" && head.status === "reserved" && firstSolo > 0) {
+      const other = head.taken_by === agentId ? head.partner_id : head.taken_by;
+      const o = other ? getAgent(other) : null;
+      const busyPartner = !o || !!o.current_task_id || o.activity === "sleeping" || (o.is_player === 1 && o.onboarding !== "done");
+      if (busyPartner) {
+        const [solo] = queue.splice(firstSolo, 1);
+        queue.unshift(solo);
+      }
+    }
+  }
   while (queue.length > 0) {
     const item = queue[0];
     const task = getTask(item.taskId);
@@ -613,8 +629,13 @@ function playerAnswersProposal(agentId: string, proposer: string, tpl: TaskTempl
     // Cannot ask today: decides itself by disposition.
     const t = traitsOf(agentId);
     const ok = t.trust >= 0.5 && !grudge;
-    remember(agentId, "self_decided", `${agentName(proposer)} 提议合作「${tpl.name}」。今天没法问你，我自己${ok ? "答应了" : "婉拒了"}。`, { proposer });
-    return { accept: ok, why: ok ? undefined : "今天不了。", reason: "今天我自己拿了个主意", principle: null };
+    remember(
+      agentId,
+      "self_decided",
+      `${agentName(proposer)} 提议合作「${tpl.name}」。这回我没等你，自己拿了主意：${ok ? "答应了——我还是愿意给人机会" : `婉拒了——我对 ${agentName(proposer)} 还没底`}。`,
+      { proposer },
+    );
+    return { accept: ok, why: ok ? undefined : "这次先不了。", reason: "今天我自己拿了个主意", principle: null };
   }
   const p = sd.principle!;
   const rec = getDb().prepare("SELECT record_defaults FROM agents WHERE id = ?").get(proposer) as { record_defaults: number };
@@ -798,6 +819,7 @@ declare global {
 
 export function startWorld(): void {
   if (globalThis.__polisWorldLoop) return;
+  void llmAvailable(); // warm the probe so the HUD shows the real LLM status
   const loop = () => {
     try {
       runDueTicks();
@@ -845,7 +867,9 @@ export function kickPlayer(agentId: string): void {
   }
   planDay(agentId);
   if (hour <= 18) {
-    startNextQueued(agentId) || chooseWork(agentId);
+    if (!startNextQueued(agentId)) chooseWork(agentId);
+  } else {
+    moveTo(agentId, "plaza", "socializing", "傍晚刚入城，在广场四处看看（明早开始干活）");
   }
 }
 

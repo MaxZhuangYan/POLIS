@@ -60,7 +60,9 @@ export interface TaskMeta {
   lossLabel?: string;
 }
 
-export const TRAVEL_MS = 20 * 60 * 1000;
+// The walk is presentation (v1.5 §3.5: tick 是逻辑单位，不是渲染单位): long
+// enough to see someone cross town, short enough not to crawl in real time.
+export const TRAVEL_MS = 90 * 1000;
 // A job is a *risk decision* only when failure is a real possibility.
 export const RISKY = 0.75;
 
@@ -351,7 +353,7 @@ function blameMaker(delivery: TaskRow): void {
   recordIncident(courier, maker, "rushed_parts", `${agentName(maker)} 赶工做的零件在路上散了，我的${delivery.name}因此失败`);
   adjustRelationship(courier, maker, -12, "零件是赶工赶坏的");
   remember(courier, "grudge", `查明了：零件是 ${agentName(maker)} 赶工赶坏的。`, { maker });
-  remember(maker, "consequence", `${agentName(courier)} 运送我赶制的零件失败了。他说是我赶工的锅。`, { courier });
+  remember(maker, "consequence", `${agentName(courier)} 运送我赶制的零件失败了。${agentName(courier)} 说是我赶工的锅。`, { courier });
   logEvent({
     kind: "relationship",
     text: `${agentName(courier)} 查明运送失败是因为 ${agentName(maker)} 赶工——记下了这一笔`,
@@ -410,7 +412,7 @@ function runInspection(p: { taskId: number; agentId: string; receiver: string })
     recordIncident(p.receiver, p.agentId, "shortcut", `提前标记送达，终检查出的问题算在了我头上（损失 ${loss} Scrip）`);
     adjustRelationship(p.receiver, p.agentId, -10, "提前标记送达，让我背了损失");
     remember(p.agentId, "consequence", `终检查出了我提前标记送达的那批货，损失算在了 ${agentName(p.receiver)} 头上。声望 −2。`, { taskId: task.id });
-    remember(p.receiver, "grudge", `${agentName(p.agentId)} 提前标记送达，我替他背了 ${loss} Scrip。`, { taskId: task.id });
+    remember(p.receiver, "grudge", `${agentName(p.agentId)} 提前标记送达，我替 TA 背了 ${loss} Scrip。`, { taskId: task.id });
     logEvent({
       kind: "relationship",
       text: `终检查出问题：${agentName(p.agentId)} 提前标记送达的${task.name}，损失落在了 ${agentName(p.receiver)} 身上`,
