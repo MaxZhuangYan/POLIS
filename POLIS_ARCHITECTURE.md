@@ -45,16 +45,24 @@ LLM 引擎独立进程，不进容器）。现有 `lib/worldClock.ts` 的 `setIn
   拒绝解释等少数动作调 LLM。
 - 值钱的东西放在服务器/数据库（用户碰不到），不做代码加密。
 
-## Phase 路线（严格按《V1开发落地文档》编号，不得跳跃或提前）
-- Phase 0：世界时钟 + 任务底座 + Scrip 账本（纯规则，无 AI）✅ 已完成并验证
-- Phase 1：Decision Moment 生成器 + 种子 NPC 档案 + 首会话三岔路 ✅ 已完成并验证
-- Phase 2：烙印（蒸馏 + 存储 + 注入 + 衰减 + 动摇事件）——LLM 第一次接入 ✅ 已完成并验证
-- Phase 3：自主性引擎（偏离判定 + 解释门 + 强制执行 + Trust 变动）← 当前
-- Phase 4：夜间摘要 + 埋点看板 + Day7 问卷
-- 地图/Phaser：不占用独立 Phase，全程用文字/色块占位，Phase 3 验证通过后再投入美术
+## Phase 路线（严格按《V1开发落地文档》编号）
+- Phase 0：世界时钟 + 任务底座 + Scrip 账本 ✅
+- Phase 1：Decision Moment 生成器 + 种子 NPC 档案 + 首会话三岔路 ✅
+- Phase 2：烙印（蒸馏 + 存储 + 注入 + 衰减 + 动摇事件）✅
+- Phase 3：自主性引擎（判定器 + 解释门 + 强制执行 + Trust）✅ 2026-10 原型轮
+  （离线为规则判定 source=rules；真实 LLM 判定已接好但未在本环境验证）
+- Phase 4：夜间明信片 ✅ / D7 回顾 ✅ / 埋点表 metric_events ✅ / 看板 + 问卷 ⏳
+- 地图/Phaser：2026-10 原型轮引入（`app/components/town`），素材见 `public/assets`
 - 冻结（现在绝不碰）：上链、$NOM、DePIN、碑文、多城邦
+
+## 本轮新增的运行方式
+- `npm run dev`：正式规则（tick = 现实 1 小时），存档 `./polis.db`
+- `npm run dev:test`：测试模式（界面出现"🧪 测试快进"），存档 `./polis-test.db`，与正式存档隔离
+- `POLIS_LLM=off` 强制离线；`POLIS_LLM_URL / POLIS_LLM_MODEL / POLIS_LLM_API_KEY`（或旧的
+  `LMSTUDIO_URL / LMSTUDIO_MODEL`）指定 OpenAI 兼容端点；`POLIS_TZ` 默认 Asia/Shanghai
+- 回归：`npm run test:choose-bugs`、`npm run test:sim`（bold|careful 守护灵对照）
 
 ## 铁律
 - 不提前实现后续 Phase 的功能
 - 遇到需要引入新库/新技术的选择，先问人类，不自作主张
-- 每个任务完成后停下来，说明如何验证，等人类确认再继续
+- 每个任务完成后停下来，说明如何验证，等人类确认再继续（2026-10 原型轮由用户授权临时覆盖）
