@@ -1,5 +1,8 @@
 import Database from "better-sqlite3";
 import { getDb } from "./db";
+import { simNow } from "./clock";
+import { llmAvailable, llmConfig } from "./llm";
+import { metric, remember, logEvent } from "./records";
 
 // ---------------------------------------------------------------------------
 // Distillation pipeline (Phase 2).
@@ -28,15 +31,18 @@ interface MomentOption {
   id: string;
   label: string;
   fallbackPrinciple: string;
+  stance?: { domain: PrincipleDomain; dir: number };
 }
 
 interface DecidedMomentRow {
   id: number;
   agent_id: string;
   type: string;
+  template_id: string;
   prompt_text: string;
   options_json: string;
   player_choice: string | null;
+  context_json: string | null;
 }
 
 interface LlmDistillationResult {
@@ -44,8 +50,6 @@ interface LlmDistillationResult {
   domain: PrincipleDomain;
 }
 
-const DEFAULT_LMSTUDIO_URL = "http://127.0.0.1:1234/v1/chat/completions";
-const DEFAULT_LMSTUDIO_MODEL = "google/gemma-4-e4b";
 const LMSTUDIO_TIMEOUT_MS = 45000; // this model's chain-of-thought reasoning
 // alone can take ~24s before it ever starts writing the JSON content, so a
 // short timeout would abort every real call before completion and always
@@ -154,13 +158,12 @@ export function parseAndValidateLlmContent(content: string): LlmDistillationResu
 // the regression test's purpose is measuring the raw model's compliance
 // rate against the test set's fixed prompt, not the pipeline's resilience.
 export async function callDistillationLlmRaw(userPrompt: string): Promise<string | null> {
-  const url = process.env.LMSTUDIO_URL ?? DEFAULT_LMSTUDIO_URL;
-  const model = process.env.LMSTUDIO_MODEL ?? DEFAULT_LMSTUDIO_MODEL;
+  const { url, model, apiKey } = llmConfig();
 
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
       body: JSON.stringify({
         model,
         temperature: 0.3,
@@ -224,6 +227,42 @@ async function distillViaLlmWithRetry(
 }
 
 // --- Per-decision distillation -----------------------------------------------
+//
+// This round: distillation runs IMMEDIATELY after the guardian answers (not
+// only in the periodic batch), because FTUE §2 requires the "3 条原则已写入
+// 记忆" moment right after the first-session forks. The periodic batch stays
+// as a catch-up net. When the LLM is unreachable we go straight to the
+// option's preset fallbackPrinciple (source='fallback') instead of waiting on
+// timeouts, so the imprint appears within a second offline.
+//
+// stance_dir is inherited from the chosen option (not inferred from the
+// LLM's wording), so offline and LLM behaviour stay consistent: the principle
+// text may differ, the direction it pushes the Agent does not.
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __polisDistillingIds: Set<number> | undefined;
+}
+
+function inFlight(): Set<number> {
+  if (!globalThis.__polisDistillingIds) globalThis.__polisDistillingIds = new Set();
+  return globalThis.__polisDistillingIds;
+}
+
+export function distillingCount(): number {
+  return inFlight().size;
+}
+
+function originFor(row: DecidedMomentRow, option: MomentOption): string {
+  let ctx: { origin?: string } = {};
+  try {
+    ctx = JSON.parse(row.context_json || "{}") as { origin?: string };
+  } catch {
+    ctx = {};
+  }
+  const scene = ctx.origin || Array.from(row.prompt_text.split(/[。！？\n]/)[0] ?? "").slice(0, 26).join("");
+  return `${scene} —— 你选了「${option.label}」`;
+}
 
 async function distillOne(db: Database.Database, row: DecidedMomentRow): Promise<void> {
   let options: MomentOption[];
@@ -236,110 +275,96 @@ async function distillOne(db: Database.Database, row: DecidedMomentRow): Promise
 
   const option = options.find((o) => o.id === row.player_choice);
   if (!option) {
-    console.error(
-      `[distillation] decision ${row.id} has no option matching player_choice=${String(
-        row.player_choice
-      )}; skipping`
-    );
+    console.error(`[distillation] decision ${row.id} has no option matching player_choice=${String(row.player_choice)}; skipping`);
     return;
   }
 
   const type = row.type as MomentType;
-
-  const llmResult = await distillViaLlmWithRetry(type, row.prompt_text, option.label);
+  const useLlm = await llmAvailable();
+  const llmResult = useLlm ? await distillViaLlmWithRetry(type, row.prompt_text, option.label) : null;
 
   let text: string;
   let domain: PrincipleDomain;
   let source: PrincipleSource;
-
   if (llmResult) {
     text = llmResult.principle;
     domain = llmResult.domain;
     source = "llm";
   } else {
     text = option.fallbackPrinciple;
-    domain = type; // decision's own type doubles as the fallback domain
+    domain = type;
     source = "fallback";
   }
+  const stanceDir = option.stance?.dir ?? 0;
 
-  const now = Date.now();
+  const now = simNow();
   try {
-    db.prepare(
-      `
-      INSERT INTO principles
-        (agent_id, text, domain, weight, source_decision_id, source, last_cited_at, last_decayed_at, created_at)
-      VALUES
-        (@agentId, @text, @domain, 1.0, @sourceDecisionId, @source, NULL, @createdAt, @createdAt)
-      `
-    ).run({
-      agentId: row.agent_id,
-      text,
-      domain,
-      sourceDecisionId: row.id,
-      source,
-      createdAt: now,
+    const res = db
+      .prepare(
+        `INSERT INTO principles
+          (agent_id, text, domain, weight, source_decision_id, source, last_cited_at, last_decayed_at, created_at, origin_text, stance_dir)
+         VALUES (@agentId, @text, @domain, 1.0, @sourceDecisionId, @source, NULL, @createdAt, @createdAt, @origin, @stance)`,
+      )
+      .run({
+        agentId: row.agent_id,
+        text,
+        domain,
+        sourceDecisionId: row.id,
+        source,
+        createdAt: now,
+        origin: originFor(row, option),
+        stance: stanceDir,
+      });
+    const principleId = Number(res.lastInsertRowid);
+    metric("distillation", { decisionId: row.id, source, llmReachable: useLlm });
+    remember(row.agent_id, "principle", `我记下了一条原则：『${text}』`, { decisionId: row.id }, principleId);
+    logEvent({
+      kind: "principle",
+      text: `一条新的烙印形成了：『${text}』`,
+      actors: [row.agent_id],
+      importance: 2,
+      data: { principleId, source },
     });
   } catch (err) {
-    // The idx_principles_source_decision_id UNIQUE index (lib/db.ts) is the
-    // DB-level backstop for cross-process/container duplicate distillation:
-    // __polisDistillationInFlight (below) only prevents overlap *within one
-    // Node process*, so if two separate processes both see decision `row.id`
-    // as "decided but not yet distilled" and race to insert, one of them will
-    // lose here. That's expected and handled, not a bug -- log informationally
-    // and return normally so the batch continues. Any other error (disk full,
-    // schema mismatch, etc.) is NOT this specific case and must still
-    // propagate to distillDecidedMoments()'s per-row catch.
-    if (err instanceof Database.SqliteError && err.code === "SQLITE_CONSTRAINT_UNIQUE") {
-      console.log(
-        `[distillation] decision ${row.id} was already distilled (likely by a concurrent process); skipping duplicate insert`
-      );
-      return;
-    }
+    if (err instanceof Database.SqliteError && err.code === "SQLITE_CONSTRAINT_UNIQUE") return;
     throw err;
   }
 }
 
-// --- Batch entry point --------------------------------------------------------
+const PENDING_SQL = `
+  SELECT id, agent_id, type, template_id, prompt_text, options_json, player_choice, context_json
+  FROM decision_moments
+  WHERE status = 'decided'
+    AND player_choice IS NOT NULL
+    AND id NOT IN (SELECT source_decision_id FROM principles WHERE source IN ('llm','fallback'))
+`;
 
-// Distills every decided-but-not-yet-distilled Decision Moment. A decision is
-// "not yet distilled" iff its id doesn't appear as a principles.source_decision_id
-// (there's no separate boolean flag column — this NOT IN check is the marker).
-//
-// Never throws: a query failure aborts the batch (logged), and a per-row
-// failure is caught and logged so it can't take down the rest of the batch.
+export async function distillMomentNow(momentId: number): Promise<void> {
+  const db = getDb();
+  if (inFlight().has(momentId)) return;
+  const row = db.prepare(`${PENDING_SQL} AND id = ?`).get(momentId) as DecidedMomentRow | undefined;
+  if (!row) return;
+  inFlight().add(momentId);
+  try {
+    await distillOne(db, row);
+  } catch (err) {
+    console.error(`[distillation] failed to distill decision ${momentId}:`, err);
+  } finally {
+    inFlight().delete(momentId);
+  }
+}
+
 export async function distillDecidedMoments(): Promise<void> {
   const db = getDb();
-
   let rows: DecidedMomentRow[];
   try {
-    rows = db
-      .prepare(
-        `
-        SELECT id, agent_id, type, prompt_text, options_json, player_choice
-        FROM decision_moments
-        WHERE status = 'decided'
-          AND id NOT IN (SELECT source_decision_id FROM principles)
-        `
-      )
-      .all() as DecidedMomentRow[];
+    rows = db.prepare(PENDING_SQL).all() as DecidedMomentRow[];
   } catch (err) {
     console.error("[distillation] failed to query decided moments:", err);
     return;
   }
-
-  for (const row of rows) {
-    try {
-      await distillOne(db, row);
-    } catch (err) {
-      // distillOne shouldn't throw (its own fetch/parse paths already catch),
-      // but this is the last line of defense so one bad row can never sink
-      // the batch.
-      console.error(`[distillation] failed to distill decision ${row.id}:`, err);
-    }
-  }
+  for (const row of rows) await distillMomentNow(row.id);
 }
-
-// --- Throttled trigger ---------------------------------------------------------
 
 declare global {
   // eslint-disable-next-line no-var
@@ -348,49 +373,19 @@ declare global {
   var __polisDistillationInFlight: boolean | undefined;
 }
 
-const DEFAULT_DISTILLATION_INTERVAL_MS = 2 * 60 * 1000; // 2 real minutes (local dev/testing only;
-// Phase 4 replaces this ad-hoc throttle with a real 04:00-local-time nightly schedule).
+const DEFAULT_DISTILLATION_INTERVAL_MS = 60 * 1000;
 
-// Fire-and-forget wrapper meant to be called periodically (e.g. from the
-// world clock tick) by another module. Only actually runs the batch if at
-// least DISTILLATION_INTERVAL_MS has passed since the last run; otherwise a
-// no-op. Never awaited by the caller — this function itself never rejects.
-//
-// Concurrency note (found during integration testing): the time-since-last
-// -run check alone is NOT enough. distillDecidedMoments() is async (each
-// decision can take up to ~30s across two LLM attempts with retries/
-// timeouts), so if a batch is still awaiting an LLM response when the next
-// tick fires, a time-only throttle would start a SECOND overlapping batch.
-// Both batches' "decided but not yet distilled" queries (a plain `NOT IN`
-// check, not a locking read) would then both see the same undistilled rows
-// before either has inserted its principle, producing duplicate principles
-// per decision. The `__polisDistillationInFlight` guard below closes this:
-// it's set synchronously before the async work starts and cleared in a
-// `finally`, so a still-running batch always blocks the next tick's attempt
-// regardless of how much wall-clock time has passed.
 export function maybeRunDistillationBatch(): void {
-  if (globalThis.__polisDistillationInFlight) {
-    return;
-  }
-
+  if (globalThis.__polisDistillationInFlight) return;
   const envInterval = Number(process.env.DISTILLATION_INTERVAL_MS);
-  const intervalMs =
-    Number.isFinite(envInterval) && envInterval > 0 ? envInterval : DEFAULT_DISTILLATION_INTERVAL_MS;
-
+  const intervalMs = Number.isFinite(envInterval) && envInterval > 0 ? envInterval : DEFAULT_DISTILLATION_INTERVAL_MS;
   const now = Date.now();
   const last = globalThis.__polisLastDistillationRun;
-
-  if (last !== undefined && now - last < intervalMs) {
-    return;
-  }
-
+  if (last !== undefined && now - last < intervalMs) return;
   globalThis.__polisLastDistillationRun = now;
   globalThis.__polisDistillationInFlight = true;
-
   distillDecidedMoments()
-    .catch((err) => {
-      console.error("[distillation] batch run failed:", err);
-    })
+    .catch((err) => console.error("[distillation] batch run failed:", err))
     .finally(() => {
       globalThis.__polisDistillationInFlight = false;
     });

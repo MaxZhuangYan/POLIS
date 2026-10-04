@@ -9,7 +9,10 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test:choose-bugs": "node scripts/test-choose-route-bugs.mjs",
-    "test:distillation-regression": "node scripts/distillation-regression.mjs"
+    "test:distillation-regression": "node scripts/distillation-regression.mjs",
+    "dev:test": "POLIS_TEST_MODE=1 POLIS_DB_PATH=./polis-test.db next dev",
+    "start:test": "POLIS_TEST_MODE=1 POLIS_DB_PATH=./polis-test.db next start",
+    "test:sim": "node scripts/sim-playthrough.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

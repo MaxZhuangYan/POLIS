@@ -17,7 +17,8 @@
 // Run: node scripts/test-choose-route-bugs.mjs
 
 import { spawn } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, mkdtempSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -25,7 +26,8 @@ import Database from "better-sqlite3";
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PORT = 3057; // dedicated port so this never collides with a dev server you already have running
 const BASE_URL = `http://localhost:${PORT}`;
-const DB_PATH = path.join(ROOT, "polis.db");
+// Scratch save in the OS temp dir: this test must never delete a real polis.db.
+const DB_PATH = path.join(mkdtempSync(path.join(os.tmpdir(), "polis-test-")), "polis.db");
 
 let failures = 0;
 function check(label, condition, detail) {
@@ -69,7 +71,7 @@ async function main() {
   const server = spawn("npx", ["next", "dev", "-p", String(PORT)], {
     cwd: ROOT,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    env: { ...process.env, POLIS_DB_PATH: DB_PATH, POLIS_LLM: "off" },
     detached: true,
   });
 

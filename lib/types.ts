@@ -50,6 +50,10 @@ export interface AgentView {
   homeSlot: number; // 0..8，住宅区里的门牌号
   activity: ActivityKind;
   activityText: string; // 例如 "在档案馆抄录旧档（还剩 2 小时）"
+  // 为什么这么做（可追溯到原则/记忆），例如 "你说过『稳定的积累胜过一次豪赌』"；无则 null
+  reason: string | null;
+  // 当前任务进度 0..1（无任务为 null），用于顶部"当前行动"进度条
+  progress: number | null;
   travel: TravelView | null;
   partnerId: string | null;
   taskName: string | null;
@@ -89,7 +93,7 @@ export interface PrincipleView {
   text: string;
   domain: Domain;
   weight: number;
-  source: "llm" | "fallback" | "forced" | "revised" | "core";
+  source: "llm" | "fallback" | "forced" | "revised" | "core" | "note";
   origin: string; // 诞生场景一句话
   createdAtMs: number;
   citedCount: number;

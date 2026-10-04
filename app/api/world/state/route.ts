@@ -1,26 +1,15 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { ensureClockMatchesState } from "@/lib/worldClock";
+import { startWorld } from "@/lib/sim";
 
+// Legacy Phase-0 read model, kept for scripts/test-choose-route-bugs.mjs and
+// quick curl checks. The game client uses /api/game/state.
 export async function GET() {
-  ensureClockMatchesState();
+  startWorld();
   const db = getDb();
-
-  const world = db.prepare("SELECT current_tick, is_running FROM world_state WHERE id = 1").get() as {
-    current_tick: number;
-    is_running: number;
-  };
-  const agents = db.prepare("SELECT * FROM agents ORDER BY name").all();
-  const tasks = db.prepare("SELECT * FROM tasks ORDER BY id").all();
-  const totalBurn = db
-    .prepare("SELECT COALESCE(SUM(-amount), 0) as total FROM ledger WHERE reason = 'burn'")
-    .get() as { total: number };
-
-  return NextResponse.json({
-    tick: world.current_tick,
-    isRunning: Boolean(world.is_running),
-    agents,
-    tasks,
-    totalBurn: totalBurn.total,
-  });
+  const world = db.prepare("SELECT current_tick, is_running FROM world_state WHERE id = 1").get() as { current_tick: number; is_running: number };
+  const agents = db.prepare("SELECT id, name, reputation, scrip, current_location, state, activity, trust, is_player FROM agents").all();
+  const tasks = db.prepare("SELECT id, name, type, reward, status, taken_by FROM tasks WHERE status IN ('open','reserved','taken') ORDER BY id DESC LIMIT 50").all();
+  const burn = db.prepare("SELECT COALESCE(SUM(-amount), 0) AS total FROM ledger WHERE reason IN ('burn','task_fee_burn')").get() as { total: number };
+  return NextResponse.json({ tick: world.current_tick, isRunning: !!world.is_running, agents, tasks, totalBurn: burn.total });
 }

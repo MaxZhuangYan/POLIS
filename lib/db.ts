@@ -1,19 +1,26 @@
 import Database from "better-sqlite3";
 import path from "node:path";
+import { NPCS, SEED_INCIDENTS, SEED_RELATIONS } from "./content";
 
-const SEED_AGENTS: Array<{ id: string; name: string; personality: string }> = [
-  { id: "mira", name: "Mira", personality: "轻信，习惯把人往好处想；出错时先怪自己。温和，道歉式口吻，爱用省略号。" },
-  { id: "sol", name: "Sol", personality: "精明，句子短，张口就是数字，从不寒暄。" },
-  { id: "tao", name: "Tao", personality: "慢性子，惜字如金。" },
-  { id: "iris", name: "Iris", personality: "严谨，说话像引用文献，对“记录”有近乎信仰的执着。" },
-  { id: "kade", name: "Kade", personality: "中立到近乎冷淡，措辞永远留有余地。" },
-  { id: "nova", name: "Nova", personality: "冲动，嗓门大，赌性写在脸上。" },
-];
+// ---------------------------------------------------------------------------
+// SQLite schema. Every change below is ADDITIVE (CREATE IF NOT EXISTS /
+// ALTER TABLE ADD COLUMN guarded by table_info) so an existing polis.db save
+// from an earlier build keeps loading. POLIS_DB_PATH lets a tester point the
+// server at a throwaway save without touching the real one.
+// ---------------------------------------------------------------------------
+
+function addColumns(db: Database.Database, table: string, cols: Array<[string, string]>) {
+  const existing = new Set((db.pragma(`table_info(${table})`) as Array<{ name: string }>).map((c) => c.name));
+  for (const [name, ddl] of cols) {
+    if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl}`);
+  }
+}
 
 function createDb(): Database.Database {
-  const dbPath = path.join(process.cwd(), "polis.db");
+  const dbPath = process.env.POLIS_DB_PATH || path.join(process.cwd(), "polis.db");
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
+  db.pragma("busy_timeout = 3000");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS agents (
@@ -53,13 +60,13 @@ function createDb(): Database.Database {
     CREATE TABLE IF NOT EXISTS decision_moments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id TEXT NOT NULL,
-      type TEXT NOT NULL,              -- 'trust' | 'risk' | 'integrity'
-      template_id TEXT NOT NULL,       -- e.g. 'FIRST_TRUST', 'T-2', 'R-4', 'I-1'
+      type TEXT NOT NULL,
+      template_id TEXT NOT NULL,
       prompt_text TEXT NOT NULL,
-      options_json TEXT NOT NULL,      -- JSON array of {id, label, fallbackPrinciple}
+      options_json TEXT NOT NULL,
       counterparty_id TEXT,
-      created_at INTEGER NOT NULL,     -- wall-clock ms epoch (Date.now()) -- NEVER a tick count
-      expires_at INTEGER NOT NULL,     -- created_at + 24h in ms -- NEVER a tick count
+      created_at INTEGER NOT NULL,     -- sim wall-clock ms (lib/clock.ts simNow) -- NEVER a tick count
+      expires_at INTEGER NOT NULL,     -- created_at + 24h
       status TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'decided' | 'expired_autonomous'
       player_choice TEXT,
       autonomous_choice TEXT
@@ -69,20 +76,20 @@ function createDb(): Database.Database {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id TEXT NOT NULL,
       text TEXT NOT NULL,
-      domain TEXT NOT NULL,                  -- 'trust' | 'risk' | 'integrity'
+      domain TEXT NOT NULL,
       weight REAL NOT NULL DEFAULT 1.0,
-      source_decision_id INTEGER NOT NULL,   -- decision_moments.id this was distilled from
-      source TEXT NOT NULL,                  -- 'llm' | 'fallback'
-      last_cited_at INTEGER,                 -- wall-clock ms; NULL until first cited
-      last_decayed_at INTEGER NOT NULL,      -- wall-clock ms; bookkeeping, starts = created_at
-      created_at INTEGER NOT NULL            -- wall-clock ms
+      source_decision_id INTEGER NOT NULL,
+      source TEXT NOT NULL,                  -- 'llm' | 'fallback' | 'forced' | 'note' | 'core'
+      last_cited_at INTEGER,
+      last_decayed_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS principle_citations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       principle_id INTEGER NOT NULL,
       context TEXT NOT NULL,
-      outcome TEXT NOT NULL,                 -- 'positive' | 'negative' | 'neutral'
+      outcome TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
 
@@ -92,86 +99,296 @@ function createDb(): Database.Database {
       principle_id INTEGER NOT NULL,
       prompt_text TEXT NOT NULL,
       created_at INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'resolved'
-      resolution TEXT,                          -- 'reaffirm' | 'revise'
+      status TEXT NOT NULL DEFAULT 'pending',
+      resolution TEXT,
       revised_text TEXT,
       resolved_at INTEGER
     );
 
-    -- Cross-process/container duplicate-distillation guard (Build Decision ⑧'s
-    -- __polisDistillationInFlight boolean only prevents overlap within a single
-    -- Node process; this DB-level constraint is what actually enforces "each
-    -- decision_moments row distills to at most one principle" when two separate
-    -- processes race). IF NOT EXISTS keeps this safe against pre-existing DB
-    -- files from earlier test runs, matching this file's other idempotent DDL.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_principles_source_decision_id ON principles(source_decision_id);
+    -- Town-visible events (feed). Narrative is only ever composed from these
+    -- rows + memories, never invented.
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at_ms INTEGER NOT NULL,
+      tick INTEGER NOT NULL DEFAULT 0,
+      kind TEXT NOT NULL,
+      text TEXT NOT NULL,
+      actors_json TEXT NOT NULL DEFAULT '[]',
+      involves_player INTEGER NOT NULL DEFAULT 0,
+      importance INTEGER NOT NULL DEFAULT 1,
+      data_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_at ON events(at_ms);
+
+    -- Per-agent episodic memory (first-person facts).
+    CREATE TABLE IF NOT EXISTS memories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      at_ms INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      text TEXT NOT NULL,
+      refs_json TEXT NOT NULL DEFAULT '{}',
+      principle_id INTEGER,
+      event_id INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id, at_ms);
+
+    -- Directed relationship record: agent_id's view of other_id.
+    CREATE TABLE IF NOT EXISTS relationships (
+      agent_id TEXT NOT NULL,
+      other_id TEXT NOT NULL,
+      familiarity INTEGER NOT NULL DEFAULT 0,
+      coop_done INTEGER NOT NULL DEFAULT 0,
+      last_event TEXT,
+      updated_ms INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (agent_id, other_id)
+    );
+
+    -- Grudges: holder remembers what offender did. ≤5 kept per pair (newest wins).
+    CREATE TABLE IF NOT EXISTS incidents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      holder_id TEXT NOT NULL,
+      offender_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      text TEXT NOT NULL,
+      at_ms INTEGER NOT NULL,
+      resolved INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- Autonomy engine verdicts on the guardian's choices (v3.14 §2.4).
+    CREATE TABLE IF NOT EXISTS judgments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      moment_id INTEGER NOT NULL,
+      agent_id TEXT NOT NULL,
+      decision TEXT NOT NULL,            -- 'execute' | 'adjust' | 'refuse'
+      chosen_option TEXT NOT NULL,
+      alt_option TEXT,                   -- what the Agent would do instead (adjust/refuse)
+      to_player TEXT NOT NULL,
+      cited_principle_id INTEGER,
+      reasons_json TEXT NOT NULL DEFAULT '[]',
+      source TEXT NOT NULL,              -- 'llm' | 'rules'
+      gate TEXT,                         -- telemetry: judged | llm_down | gate_fail | timing_gate
+      status TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | forced | adopted | overruled
+      created_ms INTEGER NOT NULL,
+      resolved_ms INTEGER,
+      feedback TEXT,
+      final_option TEXT,
+      success_trust_pending INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS trust_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      delta INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      at_ms INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS metric_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      at_ms INTEGER NOT NULL
+    );
+
+    -- 留言 (v1.5 §2.3.1): async, answered in the next postcard.
+    CREATE TABLE IF NOT EXISTS notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      kind TEXT NOT NULL,                -- 'value' | 'preference' | 'words'
+      directive_json TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reply TEXT,
+      created_ms INTEGER NOT NULL,
+      answered_ms INTEGER,
+      postcard_id INTEGER,
+      principle_id INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS postcards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      day_index INTEGER NOT NULL,
+      kind TEXT NOT NULL,                -- 'nightly' | 'recap7'
+      title TEXT NOT NULL,
+      lines_json TEXT NOT NULL,
+      cited_json TEXT NOT NULL DEFAULT '[]',
+      facts_json TEXT NOT NULL DEFAULT '{}',
+      source TEXT NOT NULL,              -- 'llm' | 'template'
+      created_ms INTEGER NOT NULL,
+      read_ms INTEGER
+    );
+
+    -- Delayed consequences (inspection of a shortcut, loan due dates, ...).
+    CREATE TABLE IF NOT EXISTS scheduled (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      due_ms INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      done INTEGER NOT NULL DEFAULT 0
+    );
   `);
 
-  // --- Idempotent migration: new columns on agents (safe against pre-existing DB files) ---
-  const agentColumns = db.pragma("table_info(agents)") as Array<{ name: string }>;
-  const hasColumn = (colName: string) => agentColumns.some((c) => c.name === colName);
+  addColumns(db, "agents", [
+    ["mbti", "TEXT"],
+    ["is_player", "INTEGER NOT NULL DEFAULT 0"],
+    ["trust", "INTEGER NOT NULL DEFAULT 100"],
+    ["created_at", "INTEGER"],
+    ["first_citation_at", "INTEGER"],
+    ["role", "TEXT NOT NULL DEFAULT ''"],
+    ["sprite", "TEXT NOT NULL DEFAULT 'rookie'"],
+    ["home_slot", "INTEGER NOT NULL DEFAULT 0"],
+    ["traits_json", "TEXT NOT NULL DEFAULT '{}'"],
+    ["activity", "TEXT NOT NULL DEFAULT 'idle'"],
+    ["activity_text", "TEXT NOT NULL DEFAULT ''"],
+    ["reason_text", "TEXT"],
+    ["travel_from", "TEXT"],
+    ["travel_to", "TEXT"],
+    ["travel_start_ms", "INTEGER"],
+    ["travel_end_ms", "INTEGER"],
+    ["partner_id", "TEXT"],
+    ["current_task_id", "INTEGER"],
+    ["bubble_text", "TEXT"],
+    ["bubble_at_ms", "INTEGER"],
+    ["emote", "TEXT"],
+    ["plan_json", "TEXT NOT NULL DEFAULT '{}'"],
+    ["record_done", "INTEGER NOT NULL DEFAULT 0"],
+    ["record_defaults", "INTEGER NOT NULL DEFAULT 0"],
+    ["onboarding", "TEXT NOT NULL DEFAULT 'done'"],
+    ["last_postcard_ms", "INTEGER"],
+  ]);
 
-  if (!hasColumn("mbti")) {
-    db.exec(`ALTER TABLE agents ADD COLUMN mbti TEXT`);
-  }
-  if (!hasColumn("is_player")) {
-    db.exec(`ALTER TABLE agents ADD COLUMN is_player INTEGER NOT NULL DEFAULT 0`);
-  }
-  if (!hasColumn("trust")) {
-    db.exec(`ALTER TABLE agents ADD COLUMN trust INTEGER NOT NULL DEFAULT 100`);
-  }
-  if (!hasColumn("created_at")) {
-    // Nullable, no default. SQLite refuses a non-constant ALTER TABLE ADD
-    // COLUMN default (e.g. an expression evaluating to "now") once a table
-    // already has rows -- and `agents` always does by this point (seed
-    // NPCs, possibly a player). So existing rows land NULL here, and so does
-    // every row inserted afterwards by app/api/player/create's INSERT
-    // (which lists explicit columns that don't include this one either).
-    // lib/decisionMoments.ts's ensureD2Citation() self-heals this: the first
-    // tick that observes a NULL created_at for a given agent stamps it with
-    // Date.now() then (see comment there). Added for the D2 首次引用硬规则
-    // (needs a real "day since agent creation" reference point).
-    db.exec(`ALTER TABLE agents ADD COLUMN created_at INTEGER`);
-  }
-  if (!hasColumn("first_citation_at")) {
-    // Wall-clock ms epoch (Date.now()); NULL until this agent's D2 首次引用
-    // (first-citation) event is fulfilled. Doubles as the "指标钩子：首次
-    // 引用时间戳" metrics hook mentioned in the design doc (full dashboard is
-    // Phase 4; this just captures/logs the timestamp now).
-    db.exec(`ALTER TABLE agents ADD COLUMN first_citation_at INTEGER`);
-  }
+  addColumns(db, "world_state", [
+    ["time_offset_ms", "INTEGER NOT NULL DEFAULT 0"],
+    ["tz", "TEXT"],
+    ["last_tick_ms", "INTEGER"],
+  ]);
+
+  addColumns(db, "tasks", [
+    ["template_id", "TEXT"],
+    ["name", "TEXT"],
+    ["location", "TEXT"],
+    ["giver", "TEXT"],
+    ["mode", "TEXT"],
+    ["duration", "INTEGER NOT NULL DEFAULT 2"],
+    ["success_rate", "REAL NOT NULL DEFAULT 1"],
+    ["partner_id", "TEXT"],
+    ["progress", "INTEGER NOT NULL DEFAULT 0"],
+    ["quality", "TEXT"],
+    ["outcome_text", "TEXT"],
+    ["moment_id", "INTEGER"],
+    ["chain_parent_id", "INTEGER"],
+    ["created_ms", "INTEGER"],
+    ["done_ms", "INTEGER"],
+    ["source", "TEXT"],
+    ["reason_text", "TEXT"],
+    ["principle_id", "INTEGER"],
+    ["receiver_id", "TEXT"],
+    ["meta_json", "TEXT NOT NULL DEFAULT '{}'"],
+  ]);
+
+  addColumns(db, "decision_moments", [
+    ["speaker_id", "TEXT"],
+    ["facts_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["escalation", "TEXT"],
+    ["context_json", "TEXT NOT NULL DEFAULT '{}'"],
+    ["judgment_id", "INTEGER"],
+    ["decided_ms", "INTEGER"],
+  ]);
+
+  addColumns(db, "principles", [
+    ["origin_text", "TEXT"],
+    ["stance_dir", "INTEGER NOT NULL DEFAULT 0"],
+  ]);
+
+  // The original unique index (one principle per decision) is kept in spirit
+  // but narrowed to distilled principles, so a forced-execution imprint can
+  // reference the same moment it was forced on.
+  db.exec(`
+    DROP INDEX IF EXISTS idx_principles_source_decision_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_principles_distilled_once
+      ON principles(source_decision_id) WHERE source IN ('llm', 'fallback');
+  `);
 
   const worldRow = db.prepare("SELECT id FROM world_state WHERE id = 1").get();
   if (!worldRow) {
-    db.prepare("INSERT INTO world_state (id, current_tick, is_running) VALUES (1, 0, 0)").run();
+    db.prepare("INSERT INTO world_state (id, current_tick, is_running) VALUES (1, 0, 1)").run();
   }
+  // Polis is "a world that is always running" (POLIS_ARCHITECTURE 部署形态).
+  db.prepare("UPDATE world_state SET is_running = 1 WHERE id = 1").run();
 
-  const agentCount = db.prepare("SELECT COUNT(*) as n FROM agents").get() as { n: number };
-  if (agentCount.n === 0) {
-    const insertAgent = db.prepare(`
-      INSERT INTO agents (id, name, personality, reputation, scrip, current_location, state, mbti, is_player, trust)
-      VALUES (@id, @name, @personality, 20, 0, 'town-center', 'idle', NULL, 0, 100)
-    `);
-    for (const agent of SEED_AGENTS) {
-      insertAgent.run(agent);
-    }
-  } else {
-    // Backfill personality for pre-existing seed rows from earlier Phase 0 test runs
-    // that were inserted with personality: "" (blank), and ensure Kade exists.
-    const backfillPersonality = db.prepare(
-      "UPDATE agents SET personality = @personality WHERE id = @id AND personality = ''"
-    );
-    const insertIfMissing = db.prepare(`
-      INSERT OR IGNORE INTO agents (id, name, personality, reputation, scrip, current_location, state, mbti, is_player, trust)
-      VALUES (@id, @name, @personality, 20, 0, 'town-center', 'idle', NULL, 0, 100)
-    `);
-    for (const agent of SEED_AGENTS) {
-      insertIfMissing.run(agent);
-      backfillPersonality.run(agent);
-    }
-  }
+  // Legacy Phase-0 task rows (random info/transport/guard) are retired.
+  db.prepare("UPDATE tasks SET status = 'legacy' WHERE template_id IS NULL AND status IN ('open','taken')").run();
+  db.prepare("UPDATE agents SET current_location = 'plaza' WHERE current_location IN ('town-center','info','transport','guard')").run();
 
+  seedNpcs(db);
   return db;
+}
+
+function seedNpcs(db: Database.Database) {
+  const now = Date.now();
+  const upsert = db.prepare(`
+    INSERT INTO agents (id, name, personality, reputation, scrip, current_location, state, mbti, is_player, trust,
+                        role, sprite, home_slot, traits_json, record_done, record_defaults, activity, created_at)
+    VALUES (@id, @name, @personality, 20, 60, 'home', 'idle', NULL, 0, 100,
+            @role, @sprite, @homeSlot, @traits, @done, @defaults, 'idle', @now)
+    ON CONFLICT(id) DO UPDATE SET
+      personality = excluded.personality,
+      role = excluded.role,
+      sprite = excluded.sprite,
+      home_slot = excluded.home_slot,
+      traits_json = excluded.traits_json
+  `);
+  for (const n of NPCS) {
+    const existed = db.prepare("SELECT role FROM agents WHERE id = ?").get(n.id) as { role: string } | undefined;
+    upsert.run({
+      id: n.id,
+      name: n.name,
+      personality: n.personality,
+      role: n.role,
+      sprite: n.sprite,
+      homeSlot: n.homeSlot,
+      traits: JSON.stringify(n.traits),
+      done: n.record.done,
+      defaults: n.record.defaults,
+      now,
+    });
+    if (!existed || !existed.role) {
+      db.prepare("UPDATE agents SET record_done = ?, record_defaults = ?, scrip = MAX(scrip, 60) WHERE id = ?").run(
+        n.record.done,
+        n.record.defaults,
+        n.id,
+      );
+    }
+  }
+
+  // Core principles (never decay) — inserted once per NPC.
+  const hasCore = db.prepare("SELECT COUNT(*) AS n FROM principles WHERE agent_id = ? AND source = 'core'");
+  const insertCore = db.prepare(`
+    INSERT INTO principles (agent_id, text, domain, weight, source_decision_id, source, last_cited_at, last_decayed_at, created_at, origin_text, stance_dir)
+    VALUES (?, ?, ?, 1.0, 0, 'core', NULL, ?, ?, ?, ?)
+  `);
+  for (const n of NPCS) {
+    if ((hasCore.get(n.id) as { n: number }).n > 0) continue;
+    for (const c of n.core) insertCore.run(n.id, c.text, c.domain, now, now, `${n.name} 的档案`, c.dir);
+  }
+
+  // Pre-history relationships and grudges, seeded once.
+  const relCount = (db.prepare("SELECT COUNT(*) AS n FROM relationships").get() as { n: number }).n;
+  if (relCount === 0) {
+    const rel = db.prepare(
+      "INSERT OR IGNORE INTO relationships (agent_id, other_id, familiarity, coop_done, last_event, updated_ms) VALUES (?, ?, ?, ?, NULL, ?)",
+    );
+    for (const r of SEED_RELATIONS) {
+      rel.run(r.a, r.b, r.familiarity, Math.round(r.familiarity / 15), now);
+      rel.run(r.b, r.a, r.familiarity, Math.round(r.familiarity / 15), now);
+    }
+    const inc = db.prepare(
+      "INSERT INTO incidents (holder_id, offender_id, kind, text, at_ms, resolved) VALUES (?, ?, 'default', ?, ?, 0)",
+    );
+    for (const i of SEED_INCIDENTS) inc.run(i.holder, i.offender, i.text, now - i.daysAgo * 86_400_000);
+  }
 }
 
 declare global {

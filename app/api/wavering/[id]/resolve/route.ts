@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { simNow } from "@/lib/clock";
+import { logEvent, metric, remember } from "@/lib/records";
 
 type WaveringEventRow = {
   id: number;
@@ -78,7 +80,7 @@ export async function POST(
   }
 
   const revisedText = trimmedRevisedText;
-  const now = Date.now();
+  const now = simNow();
 
   // The wavering_events resolution and the principles update must land
   // together: a partial write would leave an event marked resolved whose
@@ -105,6 +107,16 @@ export async function POST(
     }
   });
   resolveWavering();
+  const principle = db.prepare("SELECT text FROM principles WHERE id = ?").get(event.principle_id) as { text: string } | undefined;
+  remember(
+    event.agent_id,
+    "wavering",
+    resolution === "revise" ? `我问你还要不要坚持，你帮我改成了『${revisedText}』。` : `我问你还要不要坚持『${principle?.text ?? ""}』，你说：坚持。`,
+    { waveringId: eventId },
+    event.principle_id,
+  );
+  logEvent({ kind: "principle", text: resolution === "revise" ? `一条原则被修订为『${revisedText}』` : `你重申了原则『${principle?.text ?? ""}』`, actors: [event.agent_id], importance: 2 });
+  metric("wavering_resolved", { eventId, resolution });
 
   const updated = db
     .prepare("SELECT * FROM wavering_events WHERE id = ?")
