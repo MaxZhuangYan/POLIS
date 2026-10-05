@@ -149,11 +149,13 @@ function composeTemplate(f: Facts, noteLines: string[]): string[] {
     lines.push(`${connectors[i] ?? ""}${m.text}${n > 1 ? `（今天这样的事有 ${n} 回）` : ""}`);
   });
   if (f.principlesCited.length === 0 && f.anchorPrinciple) {
-    lines.push(
-      f.anchorPrinciple.daysAgo === 0
-        ? `我一直记着你今天说的『${f.anchorPrinciple.text}』。`
-        : `${f.anchorPrinciple.daysAgo} 天前你说过『${f.anchorPrinciple.text}』。今天没用上，但我记着。`,
-    );
+    const a = f.anchorPrinciple;
+    const variants = [
+      `${a.daysAgo} 天前你说过『${a.text}』。今天没用上，但我记着。`,
+      `今天没遇上要用『${a.text}』的事。这句话还在。`,
+      `『${a.text}』——${a.daysAgo} 天了，这句话还在我这里。`,
+    ];
+    lines.push(a.daysAgo === 0 ? `我一直记着你今天说的『${a.text}』。` : variants[f.dayIndex % variants.length]);
   }
   if (f.tasksDone + f.tasksFailed > 0) {
     lines.push(`账上：做完 ${f.tasksDone} 单，进账 ${f.income} Scrip${f.losses ? `，赔了 ${f.losses}` : ""}。`);

@@ -306,10 +306,11 @@ export function resolveTask(task: TaskRow): void {
     for (const m of members) {
       if (loss > 0) pay(m, -loss, "task_loss");
       adjustReputation(m, -1);
+      const other = members.find((x) => x !== m);
       remember(
         m,
         "task_failed",
-        `${task.name}失败了${loss > 0 ? `，赔进去 ${loss} Scrip 的${lossWord}` : "，白忙一场"}。`,
+        `${other ? `和 ${agentName(other)} 一起的` : ""}${task.name}失败了${loss > 0 ? `，赔进去 ${loss} Scrip 的${lossWord}` : "，白忙一场"}。`,
         { taskId: task.id, loss },
       );
       say(m, `${task.name}……没成。`, "upset");
