@@ -1,0 +1,62 @@
+.page {
+  --bar-h: 40px;
+  --shell-h: calc(100dvh - var(--bar-h));
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #070a14;
+}
+.bar {
+  flex: none;
+  height: var(--bar-h);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: #10162a;
+  border-bottom: 2px solid #26324f;
+  scrollbar-width: thin;
+}
+.tag {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 3px;
+  background: #f2c75c;
+  color: #2a1c00;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+.chip {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: 1px solid #3b4a6b;
+  background: #182038;
+  color: #cdd6ee;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chip:hover {
+  border-color: #6a80b0;
+}
+.on {
+  background: #3a3010;
+  border-color: #f2c75c;
+  color: #ffe9a0;
+}
+.sep {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  background: #3b4a6b;
+  margin: 0 4px;
+}
+.shell {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}

@@ -1,0 +1,44 @@
+/* The shell owns the design tokens used by every HUD / modal stylesheet. */
+
+.root {
+  --panel: rgba(14, 18, 32, 0.86);
+  --line: #3b4a6b;
+  --line-hi: #5870a0;
+  --text: #e9eefc;
+  --muted: #a3b0cf;
+  --dim: #7686a8;
+  --gold: #f2c75c;
+  --trust: #5cc8a4;
+  --risk: #f08a4b;
+  --integrity: #7aa2ff;
+  --ok: #6fd08c;
+  --font: "PingFang SC", "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  position: relative;
+  width: 100%;
+  height: var(--shell-h, 100vh);
+  height: var(--shell-h, 100dvh);
+  overflow: hidden;
+  background: #0b1020;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+.root * {
+  box-sizing: border-box;
+}
+.root button {
+  font-family: inherit;
+}
+
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  user-select: none;
+  -webkit-user-select: none;
+}
