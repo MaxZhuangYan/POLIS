@@ -117,7 +117,6 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   const [followId, setFollowId] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<DrawerTab | null>(null);
   const [feedOpen, setFeedOpen] = useState(true);
-  const [playerScreen, setPlayerScreen] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     if (phone) setFeedOpen(false);
   }, [phone]);
@@ -126,6 +125,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     setSelectedId(id);
     if (id) setDrawer(null);
   }, []);
+  const getPlayerScreen = useCallback(() => townRef.current?.getPlayerScreen() ?? null, []);
   const handleFollowChange = useCallback((id: string | null) => setFollowId(id), []);
 
   const locate = useCallback(() => {
@@ -266,7 +266,9 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     ],
     [nextPostcardLabel]
   );
-  const coachReady = !!player && player.onboarding === "done" && modal === "none" && seen !== null && !phoneSheetBlocksCoach(drawer, phone);
+  // coach marks wait (queue) while anything else is on screen: modals, drawers, the inspector, the feedback panel
+  const overlayOpen = modal !== "none" || drawer !== null || selectedId !== null || showFeedback;
+  const coachReady = !!player && player.onboarding === "done" && !overlayOpen && seen !== null;
   const coachPending = seen ? coachSteps.filter((s) => !seen.has(s.key)) : [];
   const coachStep = coachReady && coachPending.length > 0 ? coachPending[0] : null;
   const coachIndex = coachStep ? coachSteps.findIndex((s) => s.key === coachStep.key) : 0;
@@ -282,8 +284,16 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   }, [coachSteps]);
   const coachKey = coachStep?.key ?? null;
   const meId = me?.id ?? null;
+  // while the "this is your Agent" mark is open the camera keeps the (possibly walking) Agent in view
+  const coachFollowing = useRef(false);
   useEffect(() => {
-    if (coachKey === "agent" && meId) townRef.current?.focusAgent(meId);
+    if (coachKey === "agent" && meId) {
+      coachFollowing.current = true;
+      setFollowId(meId);
+    } else if (coachFollowing.current) {
+      coachFollowing.current = false;
+      setFollowId((cur) => (cur === meId ? null : cur));
+    }
   }, [coachKey, meId]);
 
   // ── keyboard ───────────────────────────────────────────────────────────
@@ -349,7 +359,6 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         followId={followId}
         onSelect={handleSelect}
         onFollowChange={handleFollowChange}
-        onPlayerScreen={setPlayerScreen}
         debug={debugTown}
       />
 
@@ -522,14 +531,9 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         />
       ) : null}
 
-      {coachStep ? <CoachMarks step={coachStep} index={coachIndex} total={coachSteps.length} playerScreen={playerScreen} onNext={coachNext} onSkip={coachSkip} /> : null}
+      {coachStep ? <CoachMarks step={coachStep} index={coachIndex} total={coachSteps.length} getPlayerScreen={getPlayerScreen} onNext={coachNext} onSkip={coachSkip} /> : null}
 
       {!snapshot ? <LoadingScreen /> : null}
     </div>
   );
-}
-
-/** on phones an open bottom sheet would sit on top of the coach targets */
-function phoneSheetBlocksCoach(drawer: DrawerTab | null, phone: boolean): boolean {
-  return phone && drawer !== null;
 }

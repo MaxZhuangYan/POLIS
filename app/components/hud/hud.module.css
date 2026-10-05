@@ -198,7 +198,7 @@
   position: absolute;
   left: 12px;
   top: var(--top, 12px);
-  width: 340px;
+  width: 360px;
   max-height: calc(100% - var(--top, 12px) - 250px);
   display: flex;
   flex-direction: column;
@@ -214,7 +214,7 @@
   left: 50%;
   top: var(--top, 12px);
   transform: translateX(-50%);
-  width: min(440px, calc(100% - 780px));
+  width: min(440px, calc(100% - 820px));
   min-width: 340px;
   display: flex;
   flex-direction: column;
@@ -489,6 +489,7 @@
   flex-direction: column;
   min-height: 0;
   flex: 0 1 auto;
+  background: rgba(14, 18, 32, 0.96);
 }
 .feedHead {
   display: flex;
@@ -503,6 +504,7 @@
   font-weight: 700;
   cursor: pointer;
   text-align: left;
+  white-space: nowrap;
 }
 .feedTitle {
   flex: 1;
@@ -637,12 +639,7 @@
 }
 @keyframes slideIn {
   from {
-    opacity: 0;
     transform: translateX(16px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
   }
 }
 .drawerHead {
@@ -1172,12 +1169,7 @@
 }
 @keyframes toastIn {
   from {
-    opacity: 0;
     transform: translateY(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
   }
 }
 .toast_player {
@@ -1336,11 +1328,12 @@
   inset: 0;
   z-index: 80;
   overflow: hidden;
+  pointer-events: none; /* the dock, rail and town stay usable while a mark is open */
 }
 .coachFull {
   position: absolute;
   inset: 0;
-  background: rgba(5, 8, 18, 0.62);
+  background: rgba(5, 8, 18, 0.5);
 }
 .coachHole {
   position: absolute;
@@ -1357,6 +1350,7 @@
 }
 .coachCard {
   position: absolute;
+  pointer-events: auto;
   width: min(300px, calc(100vw - 24px));
   padding: 14px 16px 12px;
   border-radius: 8px;
@@ -1374,7 +1368,7 @@
 .coachCard::before {
   content: "";
   position: absolute;
-  left: 50%;
+  left: var(--arrow-x, 50%);
   width: 16px;
   height: 16px;
   background: #17203a;
@@ -1488,7 +1482,7 @@
     width: 100%;
   }
   .feedClosed {
-    width: 132px;
+    width: 156px;
   }
   .feedList {
     max-height: 30dvh;
@@ -1587,7 +1581,29 @@
     z-index: 16;
   }
   .feedback {
-    bottom: 160px;
+    bottom: 82px;
+    width: calc(100% - 16px);
+    padding: 6px 38px 6px 8px;
+  }
+  .feedback p {
+    margin: 0 0 4px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .feedbackBtns {
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+  .feedbackBtns .btn {
+    min-height: 40px;
+    padding: 0 4px;
+    font-size: 13.5px;
+  }
+  .feedback .closeBtn {
+    top: 4px;
+    right: 4px;
+    width: 32px;
+    height: 32px;
   }
 }
 @keyframes sheetIn {

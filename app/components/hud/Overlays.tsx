@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { JudgmentView } from "@/lib/types";
 import type { GameActions } from "../actions";
 import { Btn, Icon, Spinner } from "./common";
@@ -225,22 +225,38 @@ export function CoachMarks({
   step,
   index,
   total,
-  playerScreen,
+  getPlayerScreen,
   onNext,
   onSkip
 }: {
   step: CoachStep;
   index: number;
   total: number;
-  playerScreen: { x: number; y: number } | null;
+  /** live position of my Agent in the viewport, read every frame */
+  getPlayerScreen: () => { x: number; y: number } | null;
   onNext: () => void;
   onSkip: () => void;
 }) {
   const [hole, setHole] = useState<Hole | null>(null);
   const missing = useRef(0);
-  const playerRef = useRef(playerScreen);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const nextRef = useRef(onNext);
   useEffect(() => {
-    playerRef.current = playerScreen;
+    nextRef.current = onNext;
+  });
+  // the mask does not block the page: using any other control (dock, rail, ...) simply counts as "got it"
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || cardRef.current?.contains(t)) return;
+      if (t.closest("button, a, [role=button], [role=tab]")) nextRef.current();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, []);
+  const playerRef = useRef(getPlayerScreen);
+  useEffect(() => {
+    playerRef.current = getPlayerScreen;
   });
 
   useLayoutEffect(() => {
@@ -248,7 +264,7 @@ export function CoachMarks({
     const measure = () => {
       let next: Hole | null = null;
       if (step.target === "agent") {
-        const p = playerRef.current;
+        const p = playerRef.current();
         if (p) next = { x: p.x - 54, y: p.y - 70, w: 108, h: 132 };
       } else {
         const el = document.querySelector<HTMLElement>(`[data-coach="${step.target}"]`);
@@ -264,7 +280,8 @@ export function CoachMarks({
       });
       if (!next) {
         missing.current += 1;
-        if (missing.current > 90) onNext(); // target never showed up, skip the step
+        // a DOM target that never shows up (8 s) is skipped; the town target just waits for the scene to load
+        if (step.target !== "agent" && missing.current > 480) onNext();
       } else missing.current = 0;
       raf = requestAnimationFrame(measure);
     };
@@ -274,18 +291,44 @@ export function CoachMarks({
 
   const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
   const vh = typeof window !== "undefined" ? window.innerHeight : 720;
-  let cardStyle: React.CSSProperties = { left: "50%", top: "40%", transform: "translateX(-50%)" };
-  let arrow: "up" | "down" = "up";
+  const cardW = Math.min(300, vw - 24);
+
+  // Where the tooltip card sits. For a target that walks around (my Agent) the card is pinned the first
+  // time it is placed, so its buttons never move; only the cut-out ring and the little arrow follow.
+  interface Place {
+    below: boolean;
+    cx: number;
+    top: number;
+  }
+  const pinned = useRef<{ key: string; place: Place } | null>(null);
+  let place: Place | null = null;
   if (hole) {
     const below = hole.y + hole.h + 16 + 150 < vh;
-    arrow = below ? "up" : "down";
-    const cx = Math.min(vw - 160, Math.max(160, hole.x + hole.w / 2));
-    cardStyle = below ? { left: cx, top: hole.y + hole.h + 14, transform: "translateX(-50%)" } : { left: cx, top: Math.max(8, hole.y - 14), transform: "translate(-50%, -100%)" };
+    place = {
+      below,
+      cx: Math.min(vw - cardW / 2 - 12, Math.max(cardW / 2 + 12, hole.x + hole.w / 2)),
+      top: below ? hole.y + hole.h + 14 : Math.max(8, hole.y - 14)
+    };
+    if (step.target === "agent") {
+      if (!pinned.current || pinned.current.key !== step.key) pinned.current = { key: step.key, place };
+      place = pinned.current.place;
+    }
+  }
+  let cardStyle: CSSProperties = { left: "50%", top: "40%", transform: "translateX(-50%)" };
+  const arrow: "up" | "down" = place && !place.below ? "down" : "up";
+  if (place && hole) {
+    const arrowX = Math.min(cardW - 28, Math.max(28, hole.x + hole.w / 2 - (place.cx - cardW / 2)));
+    cardStyle = {
+      left: place.cx,
+      top: place.top,
+      transform: place.below ? "translateX(-50%)" : "translate(-50%, -100%)",
+      ["--arrow-x" as string]: `${arrowX}px`
+    };
   }
   return (
     <div className={styles.coach} role="dialog" aria-label="新手提示">
       {hole ? <div className={styles.coachHole} style={{ left: hole.x, top: hole.y, width: hole.w, height: hole.h }} /> : <div className={styles.coachFull} />}
-      <div className={`${styles.coachCard} ${arrow === "up" ? styles.coachUp : styles.coachDown}`} style={cardStyle}>
+      <div ref={cardRef} className={`${styles.coachCard} ${arrow === "up" ? styles.coachUp : styles.coachDown}`} style={cardStyle}>
         <p>{step.text}</p>
         <div className={styles.coachFoot}>
           <span className={styles.coachStep}>

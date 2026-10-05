@@ -9,12 +9,6 @@
   justify-content: center;
   padding: 12px;
   background: rgba(5, 8, 18, 0.45);
-  animation: fade 0.16s ease-out;
-}
-@keyframes fade {
-  from {
-    opacity: 0;
-  }
 }
 
 .modal {
@@ -36,9 +30,9 @@
   animation: pop 0.18s ease-out;
   outline: none;
 }
+/* transform-only entry: if animations stall (throttled tab, slow GPU) the dialog is still fully visible */
 @keyframes pop {
   from {
-    opacity: 0;
     transform: translateY(10px) scale(0.98);
   }
 }
@@ -726,7 +720,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .backdrop,
   .modal {
     animation: none;
   }

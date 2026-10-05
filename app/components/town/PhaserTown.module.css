@@ -1,0 +1,62 @@
+.wrap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 42%, #16203a, #070a14);
+}
+.host {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+.loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 42%, #16203a, #070a14);
+  color: #a3b0cf;
+  font-family: "PingFang SC", "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 15px;
+}
+.text {
+  letter-spacing: 0.04em;
+}
+.spinner {
+  display: grid;
+  grid-template-columns: repeat(2, 14px);
+  grid-template-rows: repeat(2, 14px);
+  gap: 4px;
+}
+.spinner i {
+  background: #f2c75c;
+  opacity: 0.2;
+  animation: blink 1s steps(1) infinite;
+}
+.spinner i:nth-child(1) {
+  animation-delay: 0s;
+}
+.spinner i:nth-child(2) {
+  animation-delay: 0.25s;
+}
+.spinner i:nth-child(4) {
+  animation-delay: 0.5s;
+}
+.spinner i:nth-child(3) {
+  animation-delay: 0.75s;
+}
+@keyframes blink {
+  0% {
+    opacity: 1;
+  }
+  25%,
+  100% {
+    opacity: 0.2;
+  }
+}

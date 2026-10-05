@@ -254,15 +254,28 @@ export function ImprintModal({
   onAck: () => void;
 }) {
   const sorted = useMemo(() => [...principles].sort((a, b) => a.createdAtMs - b.createdAtMs || a.id - b.id), [principles]);
+  // tablets are revealed one by one; more can arrive while the memories are still forming
+  const [shown, setShown] = useState(0);
+  const [waitedLong, setWaitedLong] = useState(false);
+  useEffect(() => {
+    if (shown >= sorted.length) return;
+    const h = window.setTimeout(() => setShown((n) => Math.min(sorted.length, n + 1)), shown === 0 ? 350 : 750);
+    return () => window.clearTimeout(h);
+  }, [shown, sorted.length]);
+  useEffect(() => {
+    const h = window.setTimeout(() => setWaitedLong(true), 15000);
+    return () => window.clearTimeout(h);
+  }, []);
+  const allShown = shown >= sorted.length;
+  const forming = distilling > 0 && !waitedLong;
+  const ready = allShown && !forming;
   return (
     <ModalFrame title={`${sorted.length} 条原则已写入记忆`} eyebrow="你的三次低语，成了它的烙印" wide tone="gold">
       <div className={m.tablets}>
-        {sorted.map((p, i) => (
-          <PrincipleTablet key={p.id} p={p} appear delayMs={250 + i * 650} />
+        {sorted.slice(0, shown).map((p) => (
+          <PrincipleTablet key={p.id} p={p} appear />
         ))}
-        {Array.from({ length: Math.max(0, distilling) }, (_, i) => (
-          <TabletPlaceholder key={`ph${i}`} n={i} />
-        ))}
+        {allShown ? Array.from({ length: Math.max(0, distilling) }, (_, i) => <TabletPlaceholder key={`ph${i}`} n={i} />) : null}
       </div>
       {distilling > 0 ? (
         <p className={m.fine} role="status">
@@ -270,7 +283,7 @@ export function ImprintModal({
         </p>
       ) : null}
       <ErrorLine error={error} />
-      <Btn variant="primary" full busy={busy} onClick={onAck} autoFocus>
+      <Btn variant="primary" full busy={busy} disabled={!ready} onClick={onAck} autoFocus>
         看它出发
       </Btn>
     </ModalFrame>

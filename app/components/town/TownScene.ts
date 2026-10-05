@@ -9,7 +9,7 @@
 // This module imports Phaser statically, so it must only ever be loaded with a
 // dynamic import() from the browser (PhaserTown.tsx does that).
 
-import Phaser from "phaser";
+import * as Phaser from "phaser";
 import type { AgentView, Emote, GameSnapshot, LocationId } from "@/lib/types";
 import {
   EDGES,
@@ -38,8 +38,10 @@ export interface TownSceneCallbacks {
   onSelect?: (id: string | null) => void;
   /** the user dragged the map while following, so following stopped */
   onFollowChange?: (id: string | null) => void;
-  /** screen position (canvas px) of my Agent's head, null when off-screen / absent; ~8 Hz */
-  onPlayerScreen?: (pt: { x: number; y: number } | null) => void;
+  /** assets finished loading and the town is on screen */
+  onReady?: () => void;
+  /** asset loading progress 0..1 */
+  onProgress?: (p: number) => void;
 }
 
 export interface TownSceneOptions extends TownSceneCallbacks {
@@ -52,6 +54,8 @@ export interface TownApi {
   focusAgent(id: string): void;
   setFollow(id: string | null): void;
   setSelected(id: string | null): void;
+  /** live screen position (canvas px) of my Agent's body; null when off-screen or absent */
+  getPlayerScreen(): { x: number; y: number } | null;
 }
 
 // ───────────────────────────── constants ─────────────────────────────
@@ -239,6 +243,8 @@ interface Resident {
   wUntil: number;
   wBase: Pt | null;
   breathe: number;
+  lift: number; // label lift (px) to avoid name tags colliding
+  liftCur: number;
 }
 
 // ───────────────────────────── the scene ─────────────────────────────
@@ -254,7 +260,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
   private dayLight!: Phaser.GameObjects.Rectangle;
   private warmOverlay!: Phaser.GameObjects.Rectangle;
   private nightOverlay!: Phaser.GameObjects.Rectangle;
-  private colorFx: Phaser.FX.ColorMatrix | null = null;
+  private mapFallback = false;
   private grade: Grade | null = null;
   private lastGradeKey = "";
   private selectedId: string | null = null;
@@ -269,8 +275,6 @@ export class TownScene extends Phaser.Scene implements TownApi {
   private downAt: { x: number; y: number } | null = null;
   private dragged = false;
   private pinch: { dist: number } | null = null;
-  private screenEmitAt = 0;
-  private lastScreen: { x: number; y: number } | null | undefined = undefined;
   private debugGfx: Phaser.GameObjects.Graphics | null = null;
 
   constructor(opts: TownSceneOptions = {}) {
@@ -308,14 +312,22 @@ export class TownScene extends Phaser.Scene implements TownApi {
   // ───────────── phaser lifecycle ─────────────
 
   preload(): void {
-    this.load.image("map", "/assets/polis-pixel-town-map.png");
+    this.load.on("progress", (v: number) => this.opts.onProgress?.(v));
+    this.load.on("loaderror", (file: Phaser.Loader.File) => {
+      // the lighter webp is preferred; fall back to the png if it cannot be fetched
+      if (file.key === "map" && !this.mapFallback) {
+        this.mapFallback = true;
+        this.load.image("map", "/assets/polis-pixel-town-map.png");
+      }
+    });
+    this.load.image("map", "/assets/polis-pixel-town-map.webp");
     for (const k of SPRITE_KEYS) this.load.image(`spr-${k}`, `/assets/polis-sprites/${k}.png`);
     for (const [k, src] of Object.entries(EMOTE_PNG)) this.load.image(`emote-${k}`, src);
-    this.load.on("loaderror", () => undefined);
   }
 
   create(): void {
-    this.labelRes = Math.max(2, Math.min(3, Math.ceil(window.devicePixelRatio || 1)));
+    // (the canvas renderer ignores text resolution when drawing, so keep it 1 there)
+    this.labelRes = this.game.renderer.type === Phaser.WEBGL ? Math.max(2, Math.min(3, Math.ceil(window.devicePixelRatio || 1))) : 1;
     const cam = this.cameras.main;
     cam.setBackgroundColor("#0b1020");
     cam.setBounds(0, 0, MAP_W, MAP_H);
@@ -331,12 +343,9 @@ export class TownScene extends Phaser.Scene implements TownApi {
     this.mapImg = this.add.image(0, 0, "map").setOrigin(0, 0).setDepth(0);
     if (this.mapImg.width !== MAP_W) this.mapImg.setDisplaySize(MAP_W, MAP_H);
 
-    const isWebGL = this.game.renderer.type === Phaser.WEBGL;
-    if (isWebGL) {
-      const fx = this.mapImg.preFX?.addColorMatrix();
-      this.colorFx = fx ?? null;
-    }
-    // light overlays: canvas fallback for the day brightening, warm tint + night veil for both renderers
+    // Day / night grade as overlays above the map (same look in WebGL and canvas). A preFX colour matrix
+    // would be neater, but preFX renders through a screen-sized buffer and clips any big object that is
+    // partly off-screen — which a zoomed / panned map always is.
     this.dayLight = this.add
       .rectangle(0, 0, MAP_W, MAP_H, 0xfff3d6, 0)
       .setOrigin(0, 0)
@@ -347,7 +356,10 @@ export class TownScene extends Phaser.Scene implements TownApi {
 
     this.uiLayer = this.add.container(0, 0).setDepth(20000);
 
-    if (this.opts.debug) this.drawDebug();
+    if (this.opts.debug) {
+      this.drawDebug();
+      (window as unknown as { __town?: TownScene }).__town = this;
+    }
 
     this.input.setDefaultCursor("grab");
     this.input.addPointer(2);
@@ -367,6 +379,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
 
     this.ready = true;
     this.syncResidents();
+    this.opts.onReady?.();
   }
 
   // ───────────── textures ─────────────
@@ -583,7 +596,9 @@ export class TownScene extends Phaser.Scene implements TownApi {
       wMoving: false,
       wUntil: 0,
       wBase: null,
-      breathe: (seed % 100) / 15
+      breathe: (seed % 100) / 15,
+      lift: 0,
+      liftCur: 0
     };
     return res;
   }
@@ -840,7 +855,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
         // the lexicographically smaller id leads: it stands left of the lead's slot, the follower right of it
         const lead = a.id < partner.id ? res : partner;
         const leadBase = lead === res ? base : this.slotPoint(partner, loc);
-        return clampToAreas(loc, { x: leadBase.x + (lead === res ? -13 : 13), y: leadBase.y }, a.homeSlot);
+        return clampToAreas(loc, { x: leadBase.x + (lead === res ? -22 : 22), y: leadBase.y }, a.homeSlot);
       }
     }
     return base;
@@ -935,7 +950,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const zoom = this.cameras.main.zoom;
     const s = clamp(1 / zoom, 0.62, 1.12);
     res.top.setScale(s);
-    res.top.setPosition(res.x, res.y - CHAR_PX - 3 - (res.sprite.y < 0 ? 0 : 0));
+    res.top.setPosition(res.x, res.y - CHAR_PX - 3 - res.liftCur);
     res.top.setDepth(100 + res.y);
     this.updateEmote(res);
     if (res.emoteKey) {
@@ -966,9 +981,39 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const nowMs = performance.now();
     const simNow = this.estSimNow();
     for (const res of this.residents.values()) this.updateResident(res, simNow, dt, nowMs, time / 1000);
+    this.separateLabels(dt);
     this.updateGrade(dt);
     this.updateCamera(dt);
-    this.emitPlayerScreen(nowMs);
+  }
+
+  /** stack name tags upwards when two residents stand so close that the tags would overlap */
+  private separateLabels(dt: number): void {
+    const list = Array.from(this.residents.values()).sort((a, b) => a.y - b.y || a.x - b.x);
+    const done: Resident[] = [];
+    const s = clamp(1 / this.cameras.main.zoom, 0.62, 1.12);
+    const reachX = 52 * s;
+    const step = 19 * s;
+    for (const r of list) {
+      let lift = 0;
+      for (let pass = 0; pass < 4; pass++) {
+        let hit = false;
+        for (const o of done) {
+          if (Math.abs(o.x - r.x) < reachX && Math.abs(o.y - o.lift - (r.y - lift)) < step) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) break;
+        lift += step;
+      }
+      r.lift = lift;
+      done.push(r);
+    }
+    const k = 1 - Math.exp(-dt * 10);
+    for (const r of list) {
+      r.liftCur = lerp(r.liftCur, r.lift, k);
+      r.top.setY(r.y - CHAR_PX - 3 - r.liftCur);
+    }
   }
 
   // ───────────── day / night ─────────────
@@ -989,13 +1034,8 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const key = `${g.bright.toFixed(3)}|${g.night.toFixed(3)}|${g.warm.toFixed(3)}`;
     if (key === this.lastGradeKey) return;
     this.lastGradeKey = key;
-    if (this.colorFx) {
-      this.colorFx.reset();
-      this.colorFx.brightness(g.bright, false);
-    } else {
-      // canvas renderer: lift the artwork with a screen-blended light layer instead
-      this.dayLight.setFillStyle(0xfff3d6, clamp((g.bright - 1) * 0.55, 0, 0.5));
-    }
+    // brightening: a screen-blended light layer lifts the night-lit artwork towards "day"
+    this.dayLight.setFillStyle(0xfff3d6, clamp((g.bright - 1) * 0.6, 0, 0.5));
     this.warmOverlay.setFillStyle(g.warmColor, g.warm);
     this.nightOverlay.setFillStyle(0x0a1448, g.night);
   }
@@ -1093,21 +1133,13 @@ export class TownScene extends Phaser.Scene implements TownApi {
     }
   }
 
-  private emitPlayerScreen(nowMs: number): void {
-    if (!this.opts.onPlayerScreen || nowMs - this.screenEmitAt < 120) return;
-    this.screenEmitAt = nowMs;
+  getPlayerScreen(): { x: number; y: number } | null {
+    if (!this.ready) return null;
     const me = Array.from(this.residents.values()).find((r) => r.data.isPlayer);
-    let out: { x: number; y: number } | null = null;
-    if (me) {
-      const s = this.worldToScreen(me.x, me.y - CHAR_PX * 0.5);
-      if (s.x >= 0 && s.y >= 0 && s.x <= this.scale.width && s.y <= this.scale.height) out = { x: s.x, y: s.y };
-    }
-    const prev = this.lastScreen;
-    const same = prev === out || (prev && out && Math.abs(prev.x - out.x) < 1.5 && Math.abs(prev.y - out.y) < 1.5);
-    if (!same) {
-      this.lastScreen = out;
-      this.opts.onPlayerScreen(out);
-    }
+    if (!me) return null;
+    const s = this.worldToScreen(me.x, me.y - CHAR_PX * 0.5);
+    if (s.x < 0 || s.y < 0 || s.x > this.scale.width || s.y > this.scale.height) return null;
+    return s;
   }
 
   // ───────────── input ─────────────
