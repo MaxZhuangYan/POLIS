@@ -339,8 +339,9 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     else if (!player) modal = "onboarding";
     else if (player.onboarding === "forks") modal = moments.length > 0 ? "fork" : "none";
     else if (player.onboarding === "imprint") modal = "imprint";
+    // the Agent's answer to what you just told it comes before the next fork in the list you are working through
+    else if (player.pendingJudgment && dismissedJudgment !== player.pendingJudgment.id && (!effUserModal || effUserModal === "moments")) modal = "judgment";
     else if (effUserModal) modal = effUserModal;
-    else if (player.pendingJudgment && dismissedJudgment !== player.pendingJudgment.id) modal = "judgment";
     else if (player.pendingWavering && dismissedWavering !== player.pendingWavering.id) modal = "wavering";
   }
 
@@ -564,10 +565,11 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         if (k.soundOpen) setSoundOpen(false);
         else if (k.helpOpen) setHelpOpen(false);
         else if (k.coachSkip) k.coachSkip();
+        // a dialog before the "new day" card: the card fades by itself, the dialog is what Esc is meant for
+        else if (k.modal !== "none" && k.closable) k.closeModal();
         else if (k.dayCard) setDayCard(null);
-        else if (k.modal !== "none") {
-          if (k.closable) k.closeModal();
-        } else if (k.drawerOpen) setDrawer(null);
+        else if (k.modal !== "none") return;
+        else if (k.drawerOpen) setDrawer(null);
         else if (k.selectedId) setSelectedId(null);
         else if (k.selectedLoc) setSelectedLoc(null);
         return;

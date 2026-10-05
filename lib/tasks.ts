@@ -19,6 +19,12 @@ import {
 import { setCitationOutcome } from "./principleEngine";
 import type { LocationId } from "./types";
 
+/** "完成了Sol 的运送单" → "完成了 Sol 的运送单": a task name that opens with Latin gets the same spacing the rest of
+ *  the prose gives names (no task name ends in Latin, and what follows is usually CJK punctuation) */
+export function spaced(name: string): string {
+  return /^[A-Za-z0-9]/.test(name) ? ` ${name}` : name;
+}
+
 // ---------------------------------------------------------------------------
 // Jobs and their consequences (v1.5 §8). Everything a postcard later says
 // about money, cooperation, broken promises or damage comes from here.
@@ -264,8 +270,7 @@ export function resolveTask(task: TaskRow): void {
   }
 
   if (ok) {
-    // "完成了Sol 的运送单" → "完成了 Sol 的运送单": a name that opens with Latin gets the same spacing as names elsewhere
-    const named = /^[A-Za-z0-9]/.test(task.name) ? ` ${task.name}` : task.name;
+    const named = spaced(task.name);
     for (const m of members) {
       let gross = partner ? Math.floor(task.reward / 2) : task.reward;
       if (meta.playerShareCap !== undefined && isPlayer(m)) gross = Math.min(gross, meta.playerShareCap);
@@ -320,7 +325,7 @@ export function resolveTask(task: TaskRow): void {
     }
     logEvent({
       kind: task.success_rate < 1 ? "risk" : "task",
-      text: `${members.map(agentName).join(" 和 ")} 的${task.name}失败了${loss > 0 ? `（${members.length > 1 ? "各" : ""}损失 ${loss} Scrip）` : ""}`,
+      text: `${members.map(agentName).join(" 和 ")} 的${spaced(task.name)}失败了${loss > 0 ? `（${members.length > 1 ? "各" : ""}损失 ${loss} Scrip）` : ""}`,
       actors: members,
       importance: members.some(isPlayer) ? 3 : 2,
       data: { taskId: task.id, loss },
@@ -421,14 +426,14 @@ function runInspection(p: { taskId: number; agentId: string; receiver: string })
     remember(p.receiver, "grudge", `${agentName(p.agentId)} 提前标记送达，我替 TA 背了 ${loss} Scrip。`, { taskId: task.id });
     logEvent({
       kind: "relationship",
-      text: `终检查出问题：${agentName(p.agentId)} 提前标记送达的${task.name}，损失落在了 ${agentName(p.receiver)} 身上`,
+      text: `终检查出问题：${agentName(p.agentId)} 提前标记送达的${spaced(task.name)}，损失落在了 ${agentName(p.receiver)} 身上`,
       actors: [p.agentId, p.receiver],
       importance: 3,
     });
     say(p.receiver, "这批货有问题。账记在谁头上，我清楚。", "upset");
     for (const cid of meta.citationIds ?? []) setCitationOutcome(cid, "negative", `「${task.name}」被终检查出，${agentName(p.receiver)} 背了 ${loss} Scrip`);
   } else {
-    remember(p.agentId, "consequence", `那单提前标记送达的${task.name}过了终检，没出事。`, { taskId: task.id });
+    remember(p.agentId, "consequence", `那单提前标记送达的${spaced(task.name)}过了终检，没出事。`, { taskId: task.id });
     for (const cid of meta.citationIds ?? []) setCitationOutcome(cid, "positive", `「${task.name}」过了终检`);
   }
 }
