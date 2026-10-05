@@ -9,7 +9,7 @@
 [POLIS_BUILD_DECISIONS.md](POLIS_BUILD_DECISIONS.md)。
 
 第一周之后：六位居民的长期矛盾、默契（猜它会怎么做）、记忆槽位与沉睡的烙印、称号与声望解锁、公告栏、
-日结账本、每周的档案卷与三词问卷、居民之间的传闻。
+日结账本、每周的档案卷（含下周看点）与三词问卷、带出处的传闻、居民各自攒钱置业与互相借贷。
 
 ## 运行
 
@@ -50,7 +50,7 @@ npm run dev          # 正式规则：1 tick = 现实 1 小时，存档 ./polis.
 ```bash
 npm test                        # 一键：类型 → lint → 选择回归 → 寻路 → 地图校验 → 3 天模拟
 npm run build
-npm run test:sim -- careful 7   # 无界面整局模拟（careful | bold，天数）；SIM_LLM=env 用 .env.local 的模型
+npm run test:sim -- careful 7   # 无界面整局模拟（careful | bold | none=不干预对照，天数；≥14 天附长线报告）；SIM_LLM=env 用 .env.local 的模型
 npm run playtest:new            # 真浏览器：新玩家第一局（截图在 playtest-output/new/）
 npm run playtest:week -- bold 9 # 真浏览器：一周多，所有动词和长线面板，最后测「新的存档」
 npm run scenario -- d5-bait     # 造一个停在某个剧情节点的存档，再用 npm run dev:test 打开
