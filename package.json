@@ -12,7 +12,8 @@
     "test:distillation-regression": "node scripts/distillation-regression.mjs",
     "dev:test": "POLIS_TEST_MODE=1 POLIS_DB_PATH=./polis-test.db next dev",
     "start:test": "POLIS_TEST_MODE=1 POLIS_DB_PATH=./polis-test.db next start",
-    "test:sim": "node scripts/sim-playthrough.mjs"
+    "test:sim": "node scripts/sim-playthrough.mjs",
+    "test:pathfinding": "node scripts/test-pathfinding.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

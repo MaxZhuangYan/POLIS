@@ -347,3 +347,80 @@ export function Inspector({
     </aside>
   );
 }
+
+// ───────────────────────────── building card ─────────────────────────────
+
+/** Opened by clicking a building / landmark in the town: who owns it, who is there now, what happened here lately. */
+export function LocationCard({
+  id,
+  label,
+  owner,
+  here,
+  lines,
+  onPick,
+  onClose
+}: {
+  id: string;
+  label: string;
+  owner: AgentView | null;
+  here: AgentView[];
+  lines: FeedItem[];
+  onPick: (agentId: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <aside className={`${styles.panel} ${styles.inspector}`} aria-label={`${label}`} data-location={id}>
+      <header className={styles.insHead}>
+        <span className={styles.locBadge} aria-hidden>
+          <Icon name={id === "home" ? "home" : "pin"} size={26} />
+        </span>
+        <div className={styles.insWho}>
+          <strong>{label}</strong>
+          <span className={styles.insPers}>{owner ? `${owner.name} 的据点 · ${owner.role}` : "公共场所"}</span>
+        </div>
+        <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="关闭">
+          ✕
+        </button>
+      </header>
+      {owner ? (
+        <button type="button" className={styles.locOwner} onClick={() => onPick(owner.id)} title="查看他的近况">
+          <Portrait sprite={owner.sprite} size={40} />
+          <span>
+            <b>{owner.name}</b>
+            <i>{owner.activityText}</i>
+          </span>
+        </button>
+      ) : null}
+      <div className={styles.insFeed}>
+        <h4>现在在这里</h4>
+        {here.length > 0 ? (
+          <ul className={styles.locHere}>
+            {here.map((a) => (
+              <li key={a.id}>
+                <button type="button" className={styles.locChip} onClick={() => onPick(a.id)}>
+                  <Portrait sprite={a.sprite} size={28} player={a.isPlayer} />
+                  <span>{a.isPlayer ? `★ ${a.name}` : a.name}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className={styles.relLast}>现在没有人在这里。</p>
+        )}
+      </div>
+      {lines.length > 0 ? (
+        <div className={styles.insFeed}>
+          <h4>这里最近发生的事</h4>
+          <ul>
+            {lines.map((l) => (
+              <li key={l.id}>
+                <time>{l.clock}</time>
+                <span>{l.text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </aside>
+  );
+}

@@ -3,7 +3,7 @@
 // DEV ONLY: renders GameShell against a mock world that evolves over time.
 // Query params for QA / screenshots:
 //   ?scene=forks|imprint|play|refuse|refuseNoForce|adjust|wavering|notes|postcard|onboarding|loading
-//   &hour=21 (world clock)  &test=0|1  &offline=0|1  &debug=1 (road graph)  &coach=1 (show coach marks)  &retry=1
+//   &hour=21 (world clock)  &test=0|1  &offline=0|1  &debug=1 (collision / stand areas / slots / doors)  &coach=1 (show coach marks)  &retry=1
 
 import { useEffect, useRef, useState } from "react";
 import type { GameSnapshot } from "@/lib/types";
@@ -137,7 +137,7 @@ export default function DevTownPage() {
           下次操作失败
         </button>
         <button type="button" className={`${styles.chip} ${debug ? styles.on : ""}`} onClick={() => setDebug((v) => !v)}>
-          路线调试
+          碰撞/站位调试
         </button>
         <button
           type="button"
