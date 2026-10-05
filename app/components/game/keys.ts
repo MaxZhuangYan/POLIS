@@ -35,7 +35,8 @@ export const KEYS = {
  *  the background by the AudioScene after the town is on screen, so audio decoding can never hold the game back. */
 export const BLOCKING_PACK_SECTIONS = ["town", "ui", "hud"] as const;
 /** audio sections, loaded in this order by the AudioScene (sfx + title music first, the 70 s loops afterwards) */
-export const AUDIO_PACK_SECTIONS = ["audio-core", "audio-bgm"] as const;
+// Only SFX are decoded through the pack; music beds stream (see audio.ts).
+export const AUDIO_PACK_SECTIONS = ["audio-core"] as const;
 
 /** tile layer names of the map, bottom to top (collision is read by tiled.ts, never drawn) */
 export const MAP_LAYERS = ["ground", "paths", "water", "deco", "buildings"] as const;

@@ -197,22 +197,70 @@
   "audio-core": {
     "path": "/assets/audio/",
     "files": [
-      { "type": "audio", "key": "sfx-click", "url": ["sfx-click.ogg", "sfx-click.mp3"] },
-      { "type": "audio", "key": "sfx-confirm", "url": ["sfx-confirm.ogg", "sfx-confirm.mp3"] },
-      { "type": "audio", "key": "sfx-moment", "url": ["sfx-moment.ogg", "sfx-moment.mp3"] },
-      { "type": "audio", "key": "sfx-postcard", "url": ["sfx-postcard.ogg", "sfx-postcard.mp3"] },
-      { "type": "audio", "key": "sfx-imprint", "url": ["sfx-imprint.ogg", "sfx-imprint.mp3"] },
-      { "type": "audio", "key": "sfx-coin", "url": ["sfx-coin.ogg", "sfx-coin.mp3"] },
-      { "type": "audio", "key": "sfx-voice", "url": ["sfx-voice.ogg", "sfx-voice.mp3"] },
-      { "type": "audio", "key": "sfx-error", "url": ["sfx-error.ogg", "sfx-error.mp3"] },
-      { "type": "audio", "key": "bgm-title", "url": ["bgm-title.ogg", "bgm-title.mp3"] }
-    ]
-  },
-  "audio-bgm": {
-    "path": "/assets/audio/",
-    "files": [
-      { "type": "audio", "key": "bgm-day", "url": ["bgm-day.ogg", "bgm-day.mp3"] },
-      { "type": "audio", "key": "bgm-night", "url": ["bgm-night.ogg", "bgm-night.mp3"] }
+      {
+        "type": "audio",
+        "key": "sfx-click",
+        "url": [
+          "sfx-click.ogg",
+          "sfx-click.mp3"
+        ]
+      },
+      {
+        "type": "audio",
+        "key": "sfx-confirm",
+        "url": [
+          "sfx-confirm.ogg",
+          "sfx-confirm.mp3"
+        ]
+      },
+      {
+        "type": "audio",
+        "key": "sfx-moment",
+        "url": [
+          "sfx-moment.ogg",
+          "sfx-moment.mp3"
+        ]
+      },
+      {
+        "type": "audio",
+        "key": "sfx-postcard",
+        "url": [
+          "sfx-postcard.ogg",
+          "sfx-postcard.mp3"
+        ]
+      },
+      {
+        "type": "audio",
+        "key": "sfx-imprint",
+        "url": [
+          "sfx-imprint.ogg",
+          "sfx-imprint.mp3"
+        ]
+      },
+      {
+        "type": "audio",
+        "key": "sfx-coin",
+        "url": [
+          "sfx-coin.ogg",
+          "sfx-coin.mp3"
+        ]
+      },
+      {
+        "type": "audio",
+        "key": "sfx-voice",
+        "url": [
+          "sfx-voice.ogg",
+          "sfx-voice.mp3"
+        ]
+      },
+      {
+        "type": "audio",
+        "key": "sfx-error",
+        "url": [
+          "sfx-error.ogg",
+          "sfx-error.mp3"
+        ]
+      }
     ]
   },
   "meta": {

@@ -11,6 +11,9 @@
 //  * Browsers keep the AudioContext suspended until a user gesture. Nothing is queued meanwhile: SFX are dropped,
 //    and the wanted music bed starts the moment the context is unlocked (the title button, any first click / key).
 //  * Beds loop and crossfade for 1.5 s whenever the wanted bed changes. Hiding the tab pauses everything.
+//  * Music beds are STREAMED through HTMLAudioElement (ogg where supported, mp3 otherwise) instead of being
+//    decoded into WebAudio buffers: three 70 s loops decode to ~72 MB of PCM, too much for phones. Only the short
+//    SFX are decoded (they need low latency and overlap).
 //
 // This module imports Phaser: load it with dynamic import() from the browser only (PhaserTown does).
 
@@ -24,9 +27,23 @@ const MAX_SFX_VOICES = 8;
 
 interface Bed {
   mode: BgmMode;
-  sound: Phaser.Sound.BaseSound;
+  el: HTMLAudioElement;
+  /** proxy the tween animates; its value is copied to el.volume */
+  level: { v: number };
   /** the tween currently ramping this bed's volume */
   tween: Phaser.Tweens.Tween | null;
+}
+
+const BGM_DIR = "/assets/audio/";
+
+function bgmUrl(key: string): string {
+  let ogg = false;
+  try {
+    ogg = new Audio().canPlayType('audio/ogg; codecs="vorbis"') !== "";
+  } catch {
+    ogg = false;
+  }
+  return `${BGM_DIR}${key}.${ogg ? "ogg" : "mp3"}`;
 }
 
 export class AudioManager {
@@ -109,6 +126,7 @@ export class AudioManager {
   }
 
   private has(key: string): boolean {
+    if (key.startsWith("bgm-")) return !this.failed.has(key); // streamed, nothing to decode
     return this.scene.cache.audio.exists(key);
   }
 
@@ -154,8 +172,10 @@ export class AudioManager {
     this.hidden = document.visibilityState === "hidden";
     if (this.hidden) {
       this.sound.pauseAll();
+      this.bed?.el.pause();
     } else {
       this.sound.resumeAll();
+      if (this.bed) void this.bed.el.play().catch(() => undefined);
       if (this.contextState === "suspended" || this.contextState === "interrupted") {
         void (this.sound as Phaser.Sound.WebAudioSoundManager).context?.resume();
       }
@@ -194,10 +214,17 @@ export class AudioManager {
     if (!this.has(key)) return; // still decoding: applyMusic runs again when its section completes
     if (this.bed) this.fadeOutBed();
     try {
-      const sound = this.sound.add(key, { loop: true, volume: 0 });
-      sound.play();
-      const bed: Bed = { mode: want, sound, tween: null };
+      const el = new Audio(bgmUrl(key));
+      el.loop = true;
+      el.preload = "auto";
+      el.volume = 0;
+      el.addEventListener("error", () => {
+        this.failed.add(key);
+        this.report();
+      });
+      const bed: Bed = { mode: want, el, level: { v: 0 }, tween: null };
       this.bed = bed;
+      if (!this.hidden) void el.play().catch(() => undefined);
       this.rampBed(bed, vol, CROSSFADE_MS);
     } catch {
       this.failed.add(key);
@@ -207,8 +234,15 @@ export class AudioManager {
 
   private rampBed(bed: Bed, to: number, ms: number): void {
     bed.tween?.stop();
-    const sound = bed.sound as unknown as { volume: number };
-    bed.tween = this.scene.tweens.add({ targets: sound, volume: to, duration: ms, ease: "Sine.easeInOut" });
+    bed.tween = this.scene.tweens.add({
+      targets: bed.level,
+      v: to,
+      duration: ms,
+      ease: "Sine.easeInOut",
+      onUpdate: () => {
+        bed.el.volume = Phaser.Math.Clamp(bed.level.v, 0, 1);
+      }
+    });
   }
 
   private fadeOutBed(): void {
@@ -216,15 +250,18 @@ export class AudioManager {
     if (!old) return;
     this.bed = null;
     old.tween?.stop();
-    const sound = old.sound as unknown as { volume: number };
     this.scene.tweens.add({
-      targets: sound,
-      volume: 0,
+      targets: old.level,
+      v: 0,
       duration: CROSSFADE_MS,
       ease: "Sine.easeInOut",
+      onUpdate: () => {
+        old.el.volume = Phaser.Math.Clamp(old.level.v, 0, 1);
+      },
       onComplete: () => {
-        old.sound.stop();
-        old.sound.destroy();
+        old.el.pause();
+        old.el.removeAttribute("src");
+        old.el.load();
       }
     });
   }
