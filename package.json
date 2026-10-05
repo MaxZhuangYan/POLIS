@@ -21,7 +21,8 @@
     "playtest:new": "node scripts/playtest/new.mjs",
     "playtest:week": "node scripts/playtest/week.mjs",
     "test": "node scripts/test-all.mjs",
-    "playtest:sizes": "node scripts/playtest/sizes.mjs"
+    "playtest:sizes": "node scripts/playtest/sizes.mjs",
+    "playtest:record": "node scripts/playtest/record.mjs"
   },
   "dependencies": {
     "@fontsource/fusion-pixel-12px-proportional-sc": "^5.3.0",

@@ -23,7 +23,7 @@
 // WebGL in headless Chromium is software-rendered: GPU / SwiftShader warnings in the console are expected.
 
 import { chromium } from "playwright";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, apiClient, removeDbFiles, sleep, startDevServer, tempDir } from "../lib/dev-server.mjs";
 
@@ -143,6 +143,8 @@ export async function runPlaytest(name, opts, body) {
         timezoneId: TZ,
         locale: "zh-CN",
         ...(o.mobile ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+        // video: true → a .webm of this page, saved as <tag>.webm in the output dir when the page is closed
+        ...(o.video ? { recordVideo: { dir: outDir, size: o.viewport ?? { width: 1440, height: 900 } } } : {}),
       });
       context.setDefaultTimeout(sec(20));
       context.setDefaultNavigationTimeout(sec(120));
@@ -155,7 +157,16 @@ export async function runPlaytest(name, opts, body) {
     },
     async closePage(page) {
       const ctx = page.context();
+      const video = page.video();
       await ctx.close().catch(() => undefined);
+      if (video) {
+        const from = await video.path().catch(() => null);
+        if (from && existsSync(from)) {
+          const file = `${page.polisTag}.webm`;
+          renameSync(from, path.join(outDir, file));
+          shots.push(file);
+        }
+      }
       const i = contexts.indexOf(ctx);
       if (i >= 0) contexts.splice(i, 1);
     },
