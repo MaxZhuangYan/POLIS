@@ -124,6 +124,11 @@
   scrollbar-width: thin;
   scrollbar-color: var(--wood-3) transparent;
 }
+/* the body scrolls; its rows never shrink (a row with overflow-x, like the postcard stamps, would otherwise
+   collapse to 0 px on a short phone sheet) */
+.body > * {
+  flex-shrink: 0;
+}
 .foot {
   padding: 6px 4px 0;
   border-top: 2px dashed var(--paper-3);

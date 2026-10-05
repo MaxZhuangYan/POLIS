@@ -264,6 +264,8 @@ export function resolveTask(task: TaskRow): void {
   }
 
   if (ok) {
+    // "完成了Sol 的运送单" → "完成了 Sol 的运送单": a name that opens with Latin gets the same spacing as names elsewhere
+    const named = /^[A-Za-z0-9]/.test(task.name) ? ` ${task.name}` : task.name;
     for (const m of members) {
       let gross = partner ? Math.floor(task.reward / 2) : task.reward;
       if (meta.playerShareCap !== undefined && isPlayer(m)) gross = Math.min(gross, meta.playerShareCap);
@@ -273,21 +275,21 @@ export function resolveTask(task: TaskRow): void {
       if (task.giver && task.giver !== m) adjustRelationship(m, task.giver, 2, null);
       const other = members.find((x) => x !== m);
       const text = other
-        ? `和 ${agentName(other)} 一起在${loc}完成了${task.name}，分到 ${income} Scrip。`
-        : `在${loc}完成了${task.name}，赚了 ${income} Scrip。`;
+        ? `和 ${agentName(other)} 一起在${loc}完成了${named}，分到 ${income} Scrip。`
+        : `在${loc}完成了${named}，赚了 ${income} Scrip。`;
       // Working together is what relationships grow from: it outranks routine jobs in the postcard.
       remember(m, other ? "coop_done" : "task_done", text, { taskId: task.id, income });
       say(m, ok && task.mode === "routine" ? `${task.name}，做完了。` : `${task.name}，成了！`, "happy");
     }
     if (partner) {
-      adjustRelationship(owner, partner, 15, `一起完成了${task.name}`, 1);
-      adjustRelationship(partner, owner, 15, `一起完成了${task.name}`, 1);
+      adjustRelationship(owner, partner, 15, `一起完成了${named}`, 1);
+      adjustRelationship(partner, owner, 15, `一起完成了${named}`, 1);
     }
     logEvent({
       kind: partner ? "coop" : "task",
       text: partner
-        ? `${agentName(owner)} 和 ${agentName(partner)} 在${loc}完成了${task.name}（${task.reward} Scrip 对半分）`
-        : `${agentName(owner)} 在${loc}完成了${task.name}（+${task.reward}）`,
+        ? `${agentName(owner)} 和 ${agentName(partner)} 在${loc}完成了${named}（${task.reward} Scrip 对半分）`
+        : `${agentName(owner)} 在${loc}完成了${named}（+${task.reward}）`,
       actors: members,
       importance: task.mode === "routine" ? 1 : 2,
       data: { taskId: task.id },
