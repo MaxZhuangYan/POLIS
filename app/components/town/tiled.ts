@@ -1,5 +1,5 @@
-// Turns the Tiled map (public/assets/town/polis-town.tmj, raw JSON — e.g. `scene.cache.tilemap.get(key).data`)
-// into a TownModel: the data-driven geography of the town.
+// Turns a Tiled map (a .tmj registered in maps.ts, e.g. public/assets/town/polis-town.tmj; raw JSON — e.g.
+// `scene.cache.tilemap.get(key).data`) into a TownModel: the data-driven geography of the town.
 //
 //   locations     id, label, owner npc, stand-area rects, door (entry) tile, stand slots
 //   homeDoors     entry tile of every residence, by AgentView.homeSlot (0..8)
@@ -7,8 +7,9 @@
 //   interactables click / hover rectangles over buildings and landmarks
 //   grid          walkability + per-tile movement cost for pathfinding.ts
 //
-// Layer / object conventions are documented at the top of scripts/build-town-map.mjs.
-// No Phaser import: the model builds on the server / under node too (scripts/test-pathfinding.mjs).
+// Layer / object conventions are documented in doc/MAPS.md (and at the top of scripts/build-town-map.mjs).
+// `npm run map:check` validates a map against exactly these rules.
+// No Phaser import: the model builds on the server / under node too (scripts/test-pathfinding.mjs, scripts/map-check.mjs).
 
 import type { LocationId } from "@/lib/types";
 import type { PathGrid, TilePoint } from "./pathfinding";
@@ -16,16 +17,29 @@ import type { PathGrid, TilePoint } from "./pathfinding";
 export const TILE_SIZE = 16;
 
 export const LOCATION_IDS: LocationId[] = ["archive", "market", "plaza", "workshop", "outskirts", "mediation", "hall", "board", "gate", "home"];
+/** the nominal number of residences (AgentView.homeSlot is documented as 0..8); the shipped town has 9 */
 export const HOME_SLOTS = 9;
+/** what a map must provide at least: the player lives in slot 0 and the six seed NPCs in slots 1..6 (lib/content.ts).
+ *  home_door slots must be contiguous from 0; the scene wraps a slot onto the available doors (slot % doors). */
+export const MIN_HOME_SLOTS = 7;
+/** tile layers every map needs (collision = what blocks, ground = what the town stands on, also the map-margin fill) */
+export const REQUIRED_TILE_LAYERS = ["ground", "collision"] as const;
+/** tile layers that are optional: a missing one counts as an empty layer */
+export const OPTIONAL_TILE_LAYERS = ["paths", "water", "deco", "buildings", "above"] as const;
+/** the Tiled object layer that holds location / door / home_door / interactable objects */
+export const OBJECT_LAYER = "locations";
+export const OBJECT_TYPES = ["location", "door", "home_door", "interactable"] as const;
+/** Tiled flag bits (flip / rotate) live above this mask in a gid */
+export const GID_MASK = 0x1fffffff;
 
 // ───────────────────────────── raw Tiled JSON (the subset we read) ─────────────────────────────
 
-interface TiledProperty {
+export interface TiledProperty {
   name: string;
   type?: string;
   value: string | number | boolean;
 }
-interface TiledObject {
+export interface TiledObject {
   id: number;
   name: string;
   type?: string;
@@ -35,25 +49,95 @@ interface TiledObject {
   width: number;
   height: number;
   point?: boolean;
+  /** set on Tiled "tile objects" (an image placed on the map); their origin is the bottom-left corner */
+  gid?: number;
   properties?: TiledProperty[];
 }
-interface TiledLayer {
+export interface TiledLayer {
   name: string;
-  type: "tilelayer" | "objectgroup" | string;
-  data?: number[];
+  type: "tilelayer" | "objectgroup" | "group" | "imagelayer" | string;
+  width?: number;
+  height?: number;
+  offsetx?: number;
+  offsety?: number;
+  /** a plain number[] (Tile Layer Format: CSV). A string means base64 — not supported */
+  data?: number[] | string;
+  encoding?: string;
+  compression?: string;
+  /** infinite maps store chunks instead of data — not supported */
+  chunks?: unknown[];
   objects?: TiledObject[];
+  layers?: TiledLayer[];
 }
-interface TiledTileset {
+export interface TiledTileset {
   firstgid: number;
-  tiles?: { id: number; properties?: TiledProperty[] }[];
+  name?: string;
+  /** external tileset (.tsx / .tsj): not supported, embed it (Tiled: Map → Embed Tilesets) */
+  source?: string;
+  /** image path, relative to the .tmj */
+  image?: string;
+  imagewidth?: number;
+  imageheight?: number;
+  tilewidth?: number;
+  tileheight?: number;
+  margin?: number;
+  spacing?: number;
+  columns?: number;
+  tilecount?: number;
+  /** per-tile data: `properties` (cost), or `image` for an "image collection" tileset (not supported) */
+  tiles?: { id: number; image?: string; properties?: TiledProperty[] }[];
 }
 export interface TiledMap {
   width: number;
   height: number;
   tilewidth: number;
   tileheight: number;
+  orientation?: string;
+  infinite?: boolean;
   layers: TiledLayer[];
   tilesets: TiledTileset[];
+}
+
+/** what the loader and the scene need to know about one embedded tileset */
+export interface TilesetInfo {
+  name: string;
+  firstgid: number;
+  tilewidth: number;
+  tileheight: number;
+  margin: number;
+  spacing: number;
+  columns: number;
+  tilecount: number;
+  /** image URL, resolved against the .tmj URL */
+  imageUrl: string;
+}
+
+/** Resolve `rel` (as written in the .tmj) against the URL / path of the .tmj. Works for site paths and absolute URLs. */
+export function resolveAssetUrl(baseUrl: string, rel: string): string {
+  if (/^([a-z][a-z0-9+.-]*:|\/)/i.test(rel)) return rel;
+  const u = new URL(rel, new URL(baseUrl, "http://polis.invalid"));
+  return /^[a-z][a-z0-9+.-]*:/i.test(baseUrl) ? u.href : u.pathname + u.search;
+}
+
+/** The embedded tilesets of a map, ready for `load.image` / `addTilesetImage`. Throws on a tileset the game cannot use. */
+export function readTilesets(map: TiledMap, tmjUrl = "/"): TilesetInfo[] {
+  if (!map.tilesets?.length) throw new Error("map has no tileset");
+  return map.tilesets.map((ts, i) => {
+    const name = ts.name ?? `tileset${i}`;
+    if (ts.source) throw new Error(`tileset "${name}" is external (${ts.source}); embed it in Tiled: Map → Embed Tilesets`);
+    if (!ts.image) throw new Error(`tileset "${name}" has no image (image-collection tilesets are not supported)`);
+    return {
+      name,
+      firstgid: ts.firstgid,
+      tilewidth: ts.tilewidth ?? TILE_SIZE,
+      tileheight: ts.tileheight ?? TILE_SIZE,
+      margin: ts.margin ?? 0,
+      spacing: ts.spacing ?? 0,
+      columns: ts.columns ?? 0,
+      tilecount: ts.tilecount ?? 0,
+      imageUrl: resolveAssetUrl(tmjUrl, ts.image)
+    };
+  });
 }
 
 // ───────────────────────────── model ─────────────────────────────
@@ -116,37 +200,46 @@ export interface TownModel {
   covered: Uint8Array;
 }
 
-const prop = (o: { properties?: TiledProperty[] }, name: string): string | number | boolean | undefined => o.properties?.find((p) => p.name === name)?.value;
-const objType = (o: TiledObject): string => o.type || o.class || "";
-const FLAG_MASK = 0x1fffffff;
+/** a custom property of a Tiled object / tile, by name */
+export const tiledProp = (o: { properties?: TiledProperty[] }, name: string): string | number | boolean | undefined => o.properties?.find((p) => p.name === name)?.value;
+/** the object's type (Tiled 1.9+ calls it `class`) */
+export const tiledObjectType = (o: TiledObject): string => o.type || o.class || "";
+const prop = tiledProp;
+const objType = tiledObjectType;
 
 const tileOf = (o: TiledObject): TilePoint => ({ x: Math.floor(o.x / TILE_SIZE), y: Math.floor(o.y / TILE_SIZE) });
 
-/** Build the model from the raw map. Throws on a malformed map (missing layer, missing location, ...). */
+/** Build the model from the raw map. Throws on a malformed map (missing ground / collision layer, missing location, ...).
+ *  The optional layers (paths, deco, above, ...) count as empty when the map has none. */
 export function buildTownModel(map: TiledMap): TownModel {
   const W = map.width;
   const H = map.height;
-  const layer = (name: string): TiledLayer => {
-    const l = map.layers.find((x) => x.name === name);
+  const tileLayer = (name: string): TiledLayer | undefined => map.layers.find((x) => x.type === "tilelayer" && x.name === name);
+  const required = (name: string): number[] => {
+    const l = tileLayer(name);
     if (!l) throw new Error(`town map: missing layer "${name}"`);
-    return l;
+    return Array.isArray(l.data) ? l.data : [];
   };
-  const data = (name: string): number[] => layer(name).data ?? [];
+  const optional = (name: string): number[] => {
+    const l = tileLayer(name);
+    return l && Array.isArray(l.data) ? l.data : [];
+  };
 
-  // ── tile properties (cost) ──
-  const ts = map.tilesets[0];
+  // ── tile properties (cost), from every tileset ──
   const costOf = new Map<number, number>();
-  for (const t of ts.tiles ?? []) {
-    const c = t.properties?.find((p) => p.name === "cost")?.value;
-    if (typeof c === "number") costOf.set(ts.firstgid + t.id, c);
+  for (const ts of map.tilesets) {
+    for (const t of ts.tiles ?? []) {
+      const c = t.properties?.find((p) => p.name === "cost")?.value;
+      if (typeof c === "number") costOf.set(ts.firstgid + t.id, c);
+    }
   }
-  const lookup = (gid: number): number | undefined => (gid ? costOf.get(gid & FLAG_MASK) : undefined);
+  const lookup = (gid: number): number | undefined => (gid ? costOf.get(gid & GID_MASK) : undefined);
 
-  const ground = data("ground");
-  const paths = data("paths");
-  const deco = data("deco");
-  const collision = data("collision");
-  const above = data("above");
+  const ground = required("ground");
+  const collision = required("collision");
+  const paths = optional("paths");
+  const deco = optional("deco");
+  const above = optional("above");
 
   const blocked = new Uint8Array(W * H);
   const cost = new Float32Array(W * H);
@@ -160,7 +253,7 @@ export function buildTownModel(map: TiledMap): TownModel {
   const grid: PathGrid = { width: W, height: H, blocked, cost };
 
   // ── objects ──
-  const objs = (map.layers.find((l) => l.type === "objectgroup" && l.name === "locations")?.objects ?? []) as TiledObject[];
+  const objs = (map.layers.find((l) => l.type === "objectgroup" && l.name === OBJECT_LAYER)?.objects ?? []) as TiledObject[];
   const areas = new Map<LocationId, { label: string; owner: string; rects: TileRect[] }>();
   const doors = new Map<LocationId, TilePoint>();
   const homeDoors: HomeDoor[] = [];
@@ -189,7 +282,9 @@ export function buildTownModel(map: TiledMap): TownModel {
     }
   }
   homeDoors.sort((a, b) => a.slot - b.slot);
-  if (homeDoors.length !== HOME_SLOTS || homeDoors.some((d, i) => d.slot !== i)) throw new Error(`town map: expected home_door slots 0..${HOME_SLOTS - 1}`);
+  if (homeDoors.length < MIN_HOME_SLOTS || homeDoors.some((d, i) => d.slot !== i)) {
+    throw new Error(`town map: expected home_door slots 0..${MIN_HOME_SLOTS - 1} at least (contiguous from 0), found [${homeDoors.map((d) => d.slot).join(",")}]`);
+  }
 
   // ── reachability from the gate ──
   const gate = doors.get("gate");

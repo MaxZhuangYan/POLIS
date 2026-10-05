@@ -13,6 +13,7 @@ import type { AgentView, GameSnapshot, LocationId } from "@/lib/types";
 import {
   buildTownModel,
   interactableAt,
+  readTilesets,
   tileToWorld,
   worldToTile,
   type Interactable,
@@ -22,7 +23,7 @@ import {
 import { PathFinder, type TilePoint } from "@/app/components/town/pathfinding";
 import { animKey, frameIndex, spriteTexture, type Direction } from "@/app/components/town/characters";
 import { EventBus } from "../EventBus";
-import { BG_COLOR, DEPTH, KEYS, MAP_ABOVE_LAYER, MAP_LAYERS, PIXEL_FONT, SCENES, emoteTexture } from "../keys";
+import { BG_COLOR, DEPTH, KEYS, MAP_ABOVE_LAYER, MAP_LAYERS, PIXEL_FONT, SCENES, emoteTexture, tilesetTextureKey } from "../keys";
 
 // ───────────────────────────── public surface ─────────────────────────────
 
@@ -423,7 +424,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     cam.setBounds(0, 0, this.mapW, this.mapH);
     cam.setRoundPixels(true);
 
-    this.buildMap();
+    this.buildMap(raw);
     this.makeTextures();
     this.buildOverlays();
     this.buildDog();
@@ -488,35 +489,43 @@ export class TownScene extends Phaser.Scene implements TownApi {
 
   // ───────────── map ─────────────
 
-  private buildMap(): void {
+  private buildMap(raw: TiledMap): void {
     const map = this.make.tilemap({ key: KEYS.map });
-    const tileset = map.addTilesetImage(KEYS.tilesetName, KEYS.tileset, 16, 16, 1, 2);
-    if (!tileset) throw new Error("town tileset missing");
+    // every tileset the .tmj embeds, each backed by the image the Preloader loaded for it (margin / spacing / tile size
+    // come from the .tmj); layers may mix tiles of all of them
+    const tilesets: Phaser.Tilemaps.Tileset[] = [];
+    for (const info of readTilesets(raw)) {
+      const tileset = map.addTilesetImage(info.name, tilesetTextureKey(info.name), info.tilewidth, info.tileheight, info.margin, info.spacing);
+      if (!tileset) throw new Error(`town map: tileset "${info.name}" is missing its image (see the Preloader log)`);
+      tilesets.push(tileset);
+    }
+    // a layer the map does not have is simply not drawn (`npm run map:check` warns about the missing ones)
     MAP_LAYERS.forEach((name) => {
-      const layer = map.createLayer(name, tileset, 0, 0);
-      layer?.setDepth(DEPTH[name]);
+      if (map.getLayer(name)) map.createLayer(name, tilesets, 0, 0)?.setDepth(DEPTH[name]);
     });
     // roofs, canopies, torii beams: above every resident, so residents walk behind them
-    map.createLayer(MAP_ABOVE_LAYER, tileset, 0, 0)?.setDepth(DEPTH.above);
-    this.buildMapMargin(map, tileset);
+    if (map.getLayer(MAP_ABOVE_LAYER)) map.createLayer(MAP_ABOVE_LAYER, tilesets, 0, 0)?.setDepth(DEPTH.above);
+    this.buildMapMargin(map, tilesets);
   }
 
   /** The land goes on past the map edge. The HUD-safe camera bounds let the view slide beyond the map when the
    *  Agent stands at an edge (so it is never hidden under a panel); there the player sees the town's ground,
    *  darkened and fading out, instead of the empty void. */
-  private buildMapMargin(map: Phaser.Tilemaps.Tilemap, tileset: Phaser.Tilemaps.Tileset): void {
-    // the ground layer's commonest tile is what the town stands on
+  private buildMapMargin(map: Phaser.Tilemaps.Tilemap, tilesets: Phaser.Tilemaps.Tileset[]): void {
+    // the ground layer's commonest tile is what the town stands on (it may come from any of the map's tilesets)
     const counts = new Map<number, number>();
     for (const row of map.getLayer("ground")?.data ?? []) for (const t of row) if (t.index > 0) counts.set(t.index, (counts.get(t.index) ?? 0) + 1);
     const gid = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-    const at = gid !== undefined ? (tileset.getTileTextureCoordinates(gid) as { x: number; y: number } | null) : null;
-    if (!at) return;
-    const tex = this.textures.get(KEYS.tileset);
-    if (!tex.has("map-margin")) tex.add("map-margin", 0, at.x, at.y, 16, 16);
+    if (gid === undefined) return;
+    const tileset = tilesets.find((t) => t.containsTileIndex(gid));
+    const at = tileset ? (tileset.getTileTextureCoordinates(gid) as { x: number; y: number } | null) : null;
+    const tex = tileset?.image;
+    if (!tileset || !at || !tex) return;
+    if (!tex.has("map-margin")) tex.add("map-margin", 0, at.x, at.y, tileset.tileWidth, tileset.tileHeight);
     const M = 1024; // wider than any HUD inset at the smallest zoom
     const { mapW: w, mapH: h } = this;
     this.add
-      .tileSprite(-M, -M, w + 2 * M, h + 2 * M, KEYS.tileset, "map-margin")
+      .tileSprite(-M, -M, w + 2 * M, h + 2 * M, tex.key, "map-margin")
       .setOrigin(0, 0)
       .setDepth(DEPTH.ground - 1)
       .setTint(0x8a7060);
@@ -971,7 +980,10 @@ export class TownScene extends Phaser.Scene implements TownApi {
   }
 
   private slotTiles(loc: LocationId, homeSlot: number): TilePoint[] {
-    if (loc === "home") return [this.model.homeDoors[((Math.floor(homeSlot) % 9) + 9) % 9].tile];
+    if (loc === "home") {
+      const n = this.model.homeDoors.length; // 9 in the town; a smaller map wraps the slots onto its doors
+      return [this.model.homeDoors[((Math.floor(homeSlot) % n) + n) % n].tile];
+    }
     const l = this.model.locations[loc];
     return l.slots.length > 0 ? l.slots : l.door ? [l.door] : [{ x: 1, y: 1 }];
   }

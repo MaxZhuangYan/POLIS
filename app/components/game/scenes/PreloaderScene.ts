@@ -1,14 +1,21 @@
-// PreloaderScene: loads the blocking sections of the asset pack (tileset, tilemap, character sheets, facesets, emote
-// icons, HUD frames) with load.pack(), draws a pixel-style progress bar with the percentage and the file in flight
-// (the React loading screen shows the same percentage from the `load-progress` event), defines the character
-// animations once from data, launches the background AudioScene and starts the town.
+// PreloaderScene: loads the blocking sections of the asset pack (character sheets, facesets, emote icons, HUD frames)
+// with load.pack() and the active map (its .tmj, then the tileset images the .tmj embeds), draws a pixel-style progress
+// bar with the percentage and the file in flight (the React loading screen shows the same percentage from the
+// `load-progress` event), defines the character animations once from data, launches the background AudioScene and
+// starts the town.
+//
+// The map comes from the registry (town/maps.ts), chosen by PhaserTown through the game registry ("mapId"). Its tileset
+// images are only known once the .tmj is in, so they are queued from the .tmj's own completion event; the loader
+// counts them in the progress like any other file.
 //
 // The audio sections of the pack are NOT loaded here: decoding three 70 s music loops must never delay the town.
 
 import * as Phaser from "phaser";
 import { EventBus } from "../EventBus";
-import { BG_COLOR, BLOCKING_PACK_SECTIONS, KEYS, PIXEL_FONT, SCENES } from "../keys";
+import { BG_COLOR, BLOCKING_PACK_SECTIONS, KEYS, PIXEL_FONT, SCENES, tilesetTextureKey } from "../keys";
 import { createCharacterAnims } from "../anims";
+import { resolveMap } from "../../town/maps";
+import { readTilesets, type TiledMap } from "../../town/tiled";
 import { BAR_H, BAR_W } from "./BootScene";
 
 const SEG = 4; // fill granularity: one bar tile = 4 px
@@ -39,6 +46,18 @@ export class PreloaderScene extends Phaser.Scene {
       this.file.setText(file.key);
       EventBus.emit("load-progress", this.load.progress, file.key);
     });
+
+    // the map: the .tmj first, its tileset images as soon as the .tmj tells which ones
+    const map = resolveMap(this.registry.get("mapId") as string | undefined);
+    this.load.once(`${Phaser.Loader.Events.FILE_KEY_COMPLETE}tilemapJSON-${KEYS.map}`, (_key: string, _type: string, data: TiledMap) => {
+      try {
+        for (const ts of readTilesets(data, map.tmj)) this.load.image(tilesetTextureKey(ts.name), ts.imageUrl);
+      } catch (e) {
+        // never throw inside the loader (it would stall at 99 %); the town scene stops with a clear message instead
+        console.error(`[polis] map "${map.id}" (${map.tmj}): ${e instanceof Error ? e.message : String(e)} — run \`npm run map:check\``);
+      }
+    });
+    this.load.tilemapTiledJSON(KEYS.map, map.tmj);
 
     // the manifest was fetched by BootScene; load.pack accepts the ready-made object. Only the blocking sections.
     const manifest = this.cache.json.get(KEYS.manifest) as object;

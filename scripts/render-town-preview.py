@@ -61,9 +61,13 @@ def main() -> None:
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--no-above", action="store_true")
     ap.add_argument("--crop", default=None)
+    ap.add_argument("--map", default=None, help="a .tmj to render (default: the town); its tileset image is read relative to it")
     a = ap.parse_args()
 
-    tmj = json.loads((TOWN / "polis-town.tmj").read_text())
+    global TOWN
+    tmj_path = Path(a.map).resolve() if a.map else TOWN / "polis-town.tmj"
+    TOWN = tmj_path.parent
+    tmj = json.loads(tmj_path.read_text())
     ts = load_tileset(tmj["tilesets"][0])
     W, H, TW, TH = tmj["width"], tmj["height"], tmj["tilewidth"], tmj["tileheight"]
     canvas = Image.new("RGBA", (W * TW, H * TH), (11, 16, 32, 255))

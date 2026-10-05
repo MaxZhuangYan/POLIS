@@ -6,12 +6,15 @@
 //   &hour=21 (world clock)  &test=0|1  &offline=0|1  &debug=1 (collision / stand areas / slots / doors)  &coach=1 (show coach marks)  &retry=1
 //   &title=0 (skip the title screen: GameShell reads this itself)  &away=3 (pretend the player last looked 3 sim-hours ago:
 //   the welcome-back card)  Esc / ? / WASD ... all keys work as in the game.
+//   &map=<id> (a map listed in app/components/town/maps.ts, e.g. ?map=sample; default: NEXT_PUBLIC_POLIS_MAP, then the town.
+//   The toolbar's map chips do the same without a reload.) See doc/MAPS.md.
 
 import { useEffect, useRef, useState } from "react";
 import type { GameSnapshot } from "@/lib/types";
 import type { BusyKey } from "@/app/components/actions";
 import GameShell from "@/app/components/GameShell";
 import { MockGame, SCENES, type FixtureScene } from "@/app/components/devFixture";
+import { MAPS, getMap, resolveMap } from "@/app/components/town/maps";
 import styles from "./page.module.css";
 
 const HOURS = [6, 9, 14, 18, 21, 23];
@@ -31,6 +34,7 @@ export default function DevTownPage() {
   const [debug, setDebug] = useState(false);
   const [shellKey, setShellKey] = useState(0);
   const [ready, setReady] = useState(false);
+  const [mapId, setMapId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
@@ -67,6 +71,7 @@ export default function DevTownPage() {
     setOffline(g.opts.offline);
     setRetrying(g.retrying);
     setDebug(q.get("debug") === "1");
+    setMapId(resolveMap(q.get("map")).id); // an unknown ?map= falls back (and warns in the console)
     const refresh = () => {
       setSnapshot(g.build());
       setBusy(g.busy);
@@ -90,6 +95,19 @@ export default function DevTownPage() {
     g?.setScene(s);
   };
 
+  const pickMap = (id: string) => {
+    if (!getMap(id)) return;
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set("map", id);
+      window.history.replaceState(null, "", u.toString());
+    } catch {
+      /* ignore */
+    }
+    setMapId(id);
+    setShellKey((k) => k + 1); // a new map restarts the whole game view (loading screen included)
+  };
+
   return (
     <div className={styles.page}>
       <div className={styles.bar} role="toolbar" aria-label="dev 状态切换">
@@ -97,6 +115,12 @@ export default function DevTownPage() {
         {SCENES.map((s) => (
           <button key={s.id} type="button" className={`${styles.chip} ${scene === s.id ? styles.on : ""}`} onClick={() => pick(s.id)}>
             {s.label}
+          </button>
+        ))}
+        <span className={styles.sep} />
+        {MAPS.map((m) => (
+          <button key={m.id} type="button" title={`地图 ${m.id}：${m.description ?? ""}`} className={`${styles.chip} ${mapId === m.id ? styles.on : ""}`} onClick={() => pickMap(m.id)}>
+            地图·{m.title}
           </button>
         ))}
         <span className={styles.sep} />
@@ -190,7 +214,7 @@ export default function DevTownPage() {
       </div>
       <div className={styles.shell}>
         {ready && g ? (
-          <GameShell key={`${shellKey}-${debug ? "d" : "n"}`} snapshot={snapshot} actions={g.actions} busy={busy} error={error} connection={retrying ? "retrying" : "ok"} debugTown={debug} />
+          <GameShell key={`${shellKey}-${debug ? "d" : "n"}`} snapshot={snapshot} actions={g.actions} busy={busy} error={error} connection={retrying ? "retrying" : "ok"} debugTown={debug} mapId={mapId} />
         ) : null}
       </div>
     </div>

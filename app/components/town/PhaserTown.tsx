@@ -30,6 +30,8 @@ export interface PhaserTownProps {
   onFollowChange: (id: string | null) => void;
   /** draw collision / stand areas / slots / doors over the map (dev QA) */
   debug?: boolean;
+  /** which registered map (town/maps.ts) the Preloader loads and the Town scene builds; changing it restarts the game */
+  mapId?: string;
 }
 
 export interface PhaserTownHandle {
@@ -41,7 +43,7 @@ export interface PhaserTownHandle {
 }
 
 const PhaserTown = forwardRef<PhaserTownHandle, PhaserTownProps>(function PhaserTown(props, ref) {
-  const { snapshot, selectedId, followId, debug = false } = props;
+  const { snapshot, selectedId, followId, debug = false, mapId } = props;
   const hostRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<import("phaser").Game | null>(null);
   const busRef = useRef<TownEventBus | null>(null);
@@ -119,7 +121,12 @@ const PhaserTown = forwardRef<PhaserTownHandle, PhaserTownProps>(function Phaser
         disableContextMenu: true,
         fps: { target: 60 },
         scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.NO_CENTER },
-        callbacks: { preBoot: (g) => g.registry.set("debug", debug) },
+        callbacks: {
+          preBoot: (g) => {
+            g.registry.set("debug", debug);
+            g.registry.set("mapId", mapId ?? null); // read by the Preloader (resolveMap falls back to the default)
+          }
+        },
         scene: [bootMod.BootScene, preMod.PreloaderScene, townMod.TownScene, audioMod.AudioScene]
       });
       gameRef.current = game;
@@ -145,7 +152,7 @@ const PhaserTown = forwardRef<PhaserTownHandle, PhaserTownProps>(function Phaser
       teardown?.();
       teardown = null;
     };
-  }, [debug]);
+  }, [debug, mapId]);
 
   useEffect(() => {
     busRef.current?.emit("cmd-snapshot", snapshot);

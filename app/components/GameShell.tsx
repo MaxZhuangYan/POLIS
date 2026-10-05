@@ -23,7 +23,8 @@ import type { AgentView, FeedItem, GameSnapshot, LocationId, MomentView } from "
 import type { BusyKey, GameActions } from "./actions";
 import PhaserTown, { type PhaserTownHandle } from "./town/PhaserTown";
 import { readLocationMeta, type LocationMeta, type TiledMap } from "./town/tiled";
-import { TOWN_MAP_URL, ensurePixelFont, type BgmMode } from "./game/keys";
+import { resolveMap } from "./town/maps";
+import { ensurePixelFont, type BgmMode } from "./game/keys";
 import { AgentCard, ActionBar, ClockPill, OffsetNote, StatusPills } from "./hud/TopHud";
 import { Drawer, FeedPanel, Inspector, LocationCard, Rail, type DrawerTab } from "./hud/SidePanels";
 import { Banner, CoachMarks, Dock, FeedbackPrompt, LocateButton, TestPanel, Toasts, type CoachStep, type ToastItem } from "./hud/Overlays";
@@ -46,6 +47,8 @@ export type GameShellProps = {
   connection?: "ok" | "retrying";
   /** dev QA: draw the road graph / areas over the town */
   debugTown?: boolean;
+  /** a registered map id (town/maps.ts); only the dev page passes one. Default: NEXT_PUBLIC_POLIS_MAP, then the town */
+  mapId?: string;
 };
 
 type UserModal = "note" | "postcards" | "moments" | null;
@@ -133,7 +136,8 @@ async function run(fn: () => Promise<void>): Promise<boolean> {
   }
 }
 
-export default function GameShell({ snapshot, actions, busy, error, connection = "ok", debugTown = false }: GameShellProps) {
+export default function GameShell({ snapshot, actions, busy, error, connection = "ok", debugTown = false, mapId }: GameShellProps) {
+  const map = useMemo(() => resolveMap(mapId), [mapId]);
   const world = snapshot?.world ?? null;
   const player = snapshot?.player ?? null;
   const me: AgentView | null = player?.agent ?? null;
@@ -280,7 +284,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   }, []);
   useEffect(() => {
     let off = false;
-    fetch(TOWN_MAP_URL)
+    fetch(map.tmj)
       .then((r) => r.json() as Promise<TiledMap>)
       .then((m) => {
         if (!off) setLocMeta(readLocationMeta(m));
@@ -291,7 +295,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     return () => {
       off = true;
     };
-  }, []);
+  }, [map.tmj]);
   // opening a drawer closes the building card (the card never hides behind a drawer and pops back later)
   useEffect(() => {
     if (drawer) setSelectedLoc(null);
@@ -768,6 +772,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         onSelectLocation={handleSelectLocation}
         onFollowChange={handleFollowChange}
         debug={debugTown}
+        mapId={map.id}
       />
 
       {snapshot && world && flow === "playing" ? (

@@ -3,16 +3,6 @@
     "path": "/assets/town/",
     "files": [
       {
-        "type": "image",
-        "key": "town-tileset",
-        "url": "tileset.png"
-      },
-      {
-        "type": "tilemapTiledJSON",
-        "key": "town-map",
-        "url": "polis-town.tmj"
-      },
-      {
         "type": "spritesheet",
         "key": "char-14",
         "url": "characters/14.png",
