@@ -9,11 +9,14 @@
 //   - D2 first-citation happens; the world keeps producing NPC events
 //   - judgments / force-execute / notes round-trip without errors
 //
-// Usage: node scripts/sim-playthrough.mjs [bold|careful] [days]
+// Usage: node scripts/sim-playthrough.mjs [bold|careful|none] [days]
+//   none = the control run: the guardian answers the three first forks and then never intervenes again
+//   (forks run out and the Agent decides; no notes, no guesses). 14+ days also prints a long-run health report.
 // This is a mechanics regression with the OFFLINE rule engine; it is not
 // evidence of real-LLM personality quality.
 
 import { llmReport } from "./llm-report.mjs";
+import { longRunReport } from "./lib/long-run.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -23,9 +26,9 @@ import Database from "better-sqlite3";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const LLM_RUN = process.env.SIM_LLM === "env" || !!process.env.SIM_LLM_URL;
-const POLICY = process.argv[2] === "careful" ? "careful" : "bold";
+const POLICY = ["careful", "none"].includes(process.argv[2]) ? process.argv[2] : "bold";
 const DAYS = Number(process.argv[3] ?? 7);
-const PORT = 3000 + 60 + (POLICY === "bold" ? 1 : 2);
+const PORT = 3000 + 60 + { bold: 1, careful: 2, none: 3 }[POLICY];
 const BASE = `http://localhost:${PORT}`;
 const DB_PATH = path.join(mkdtempSync(path.join(os.tmpdir(), "polis-sim-")), "polis.db");
 
@@ -59,7 +62,7 @@ async function waitReady() {
   throw new Error("server not ready");
 }
 
-// Guardian policy: bold = trust/risk/efficiency; careful = the opposite.
+// Guardian policy: bold = trust/risk/efficiency; careful = the opposite; none answers only the first three (as careful).
 function pick(moment) {
   const opts = moment.options;
   const want = POLICY === "bold" ? 0 : opts.length - 1;
@@ -119,7 +122,7 @@ async function main() {
     story.push(`After ack: ${s.player.agent.activityText} | reason: ${s.player.agent.reason ?? "—"}`);
     check("agent sets off immediately (not idle at gate)", s.player.agent.location !== "gate", s.player.agent.location);
 
-    await api("POST", "/api/notes", { text: POLICY === "bold" ? "今天辛苦了" : "这几天稳一点，别冒险" });
+    if (POLICY !== "none") await api("POST", "/api/notes", { text: POLICY === "bold" ? "今天辛苦了" : "这几天稳一点，别冒险" });
 
     let forced = 0;
     for (let h = 0; h < DAYS * 24; h += 3) {
@@ -130,6 +133,14 @@ async function main() {
       }
       s = (await api("GET", "/api/game/state")).json;
       const p = s.player;
+      if (POLICY === "none") {
+        // hands off: only read what arrives (a postcard is read, never answered)
+        for (const c of p.postcards.items.filter((c) => !c.read)) {
+          story.push(`Day${c.dayIndex + 1} POSTCARD (${c.kind}/${c.source}):\n      ${c.lines.join("\n      ")}`);
+          await api("POST", `/api/postcards/${c.id}/read`);
+        }
+        continue;
+      }
       if (p.pendingJudgment) {
         const j = p.pendingJudgment;
         story.push(`Day${p.dayIndex + 1} ${s.world.hour}:00 JUDGMENT ${j.decision}: ${j.toPlayer}`);
@@ -200,7 +211,7 @@ async function main() {
     const postcards = db.prepare("SELECT COUNT(*) n FROM postcards WHERE agent_id = ?").get(pid).n;
     const ledgerSum = db.prepare("SELECT COALESCE(SUM(amount),0) s FROM ledger WHERE agent_id = ? AND reason != 'task_fee_burn'").get(pid).s;
     check("ledger reconciles with Scrip balance", ledgerSum === s.player.agent.scrip, `ledger=${ledgerSum} scrip=${s.player.agent.scrip}`);
-    check("principles were cited by later decisions", citations >= 3, `${citations}`);
+    check("principles were cited by later decisions", citations >= (POLICY === "none" ? 1 : 3), `${citations}`);
     check("D2 first citation happened", firstCitation != null);
     check("NPCs produced their own events", npcEvents >= 10, `${npcEvents}`);
     check(`one postcard per night (≥${DAYS - 1})`, postcards >= DAYS - 1, `${postcards}`);
@@ -226,6 +237,16 @@ async function main() {
     const today = s.player.ledger[0];
     if (today) console.log(`ledger today: net ${today.net} · ${today.lines.map((l) => `${l.label} ${l.amount}`).join(", ")}`);
     if (DAYS >= 5) check("residents brought their dilemmas (D4+)", dilemmas.length >= 1, `${dilemmas.length}`);
+    if (POLICY === "none") {
+      const decidedAlone = db.prepare("SELECT COUNT(*) n FROM decision_moments WHERE agent_id = ? AND status = 'expired_autonomous'").get(pid).n;
+      check("left alone, the Agent decides the forks that run out", decidedAlone >= 1 || s.player.pendingMoments.length === 0, `${decidedAlone}`);
+    }
+    if (DAYS >= 14) {
+      const lr = longRunReport(db, pid);
+      console.log("\n=== long run ===");
+      for (const l of lr.lines) console.log(" ", l);
+      for (const c of lr.checks) check(c.label, c.ok, c.detail);
+    }
     check("imprints never exceed the slots", s.player.imprintSlots.used <= s.player.imprintSlots.total, JSON.stringify(s.player.imprintSlots));
     if (DAYS >= 14) check("a second weekly volume was written", db.prepare("SELECT COUNT(*) n FROM postcards WHERE kind = 'recap7'").get().n >= 2);
     const steps = db.prepare("SELECT COUNT(*) n FROM scheduled WHERE kind = 'steps' AND done = 0 AND due_ms < ?").get(Date.now() + s.world.offsetMs - 3600_000).n;
