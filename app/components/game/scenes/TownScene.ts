@@ -1,53 +1,30 @@
-// The Phaser side of the town view.
+// The world scene: a Tiled tilemap town with animated residents.
 //
-// Design rule (see POLIS 玩法设计): everything a resident does on screen is
-// *presentation of logical state*. The snapshot says where an agent is (or
-// which road it is on, and between which sim timestamps); the scene only
-// decides how to draw that — walking cadence, idle wander inside the location,
+// Design rule (see POLIS 玩法设计): everything a resident does on screen is *presentation of logical state*. The
+// snapshot says where an agent is (or which road it is on, and between which sim timestamps); the scene only
+// decides how to draw that — A* routes along the tile roads, walk animations, idle wander inside the location,
 // bubbles — and never invents positions that contradict the state.
 //
-// This module imports Phaser statically, so it must only ever be loaded with a
-// dynamic import() from the browser (PhaserTown.tsx does that).
+// This module imports Phaser statically, so it must only ever be loaded with a dynamic import() from the browser
+// (PhaserTown.tsx does that). It talks to React through EventBus, never through callbacks.
 
 import * as Phaser from "phaser";
-import type { AgentView, Emote, GameSnapshot, LocationId } from "@/lib/types";
+import type { AgentView, GameSnapshot, LocationId } from "@/lib/types";
 import {
-  EDGES,
-  LOCATIONS,
-  MAP_H,
-  MAP_W,
-  NODES,
-  anchorOf,
-  areasOf,
-  clampToAreas,
-  dist,
-  homeDoor,
-  inAreas,
-  pathBetween,
-  pathFromPoint,
-  pathLength,
-  pointAlong,
-  slotsOf,
-  type Pt
-} from "./mapData";
+  buildTownModel,
+  interactableAt,
+  tileToWorld,
+  worldToTile,
+  type Interactable,
+  type TiledMap,
+  type TownModel
+} from "@/app/components/town/tiled";
+import { PathFinder, type TilePoint } from "@/app/components/town/pathfinding";
+import { animKey, frameIndex, spriteTexture, type Direction } from "@/app/components/town/characters";
+import { EventBus } from "../EventBus";
+import { BG_COLOR, DEPTH, KEYS, MAP_ABOVE_LAYER, MAP_LAYERS, SCENES, emoteTexture } from "../keys";
 
 // ───────────────────────────── public surface ─────────────────────────────
-
-export interface TownSceneCallbacks {
-  /** a resident was clicked (id) or empty ground was clicked (null) */
-  onSelect?: (id: string | null) => void;
-  /** the user dragged the map while following, so following stopped */
-  onFollowChange?: (id: string | null) => void;
-  /** assets finished loading and the town is on screen */
-  onReady?: () => void;
-  /** asset loading progress 0..1 */
-  onProgress?: (p: number) => void;
-}
-
-export interface TownSceneOptions extends TownSceneCallbacks {
-  /** draw road graph / areas / slots over the map */
-  debug?: boolean;
-}
 
 export interface TownApi {
   setSnapshot(snapshot: GameSnapshot | null): void;
@@ -61,24 +38,17 @@ export interface TownApi {
 // ───────────────────────────── constants ─────────────────────────────
 
 const FONT = '"PingFang SC","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei",sans-serif';
-const MAX_ZOOM = 2.4;
-const CHAR_PX = 44; // displayed character height at zoom 1
-const SPRITE_BBOX_H = 76; // opaque height inside the 80x80 frame
-const SPRITE_SCALE = CHAR_PX / SPRITE_BBOX_H;
+const MAX_ZOOM = 4;
+const ZOOM_STEPS = [1, 1.5, 2, 2.5, 3, 4];
+const DEFAULT_ZOOM = 2.5;
+const DEFAULT_ZOOM_PHONE = 2;
+const CHAR_H = 16; // a character is one tile
 const BUBBLE_MS = 7000;
 const BUBBLE_FADE_MS = 700;
-const CATCHUP_MAX_S = 2;
+const CATCHUP_MAX_S = 2.4;
+const CATCHUP_SPEED = 80; // px / s
+const WANDER_SPEED = 15; // px / s
 const GOLD = 0xf2c75c;
-
-const SPRITE_KEYS = ["architect", "broker", "maker", "archivist", "mediator", "scout", "rookie", "courier", "guide"];
-const EMOTE_PNG: Partial<Record<Emote, string>> = {
-  think: "/assets/aiv/ui/icon-thoughts.png",
-  trade: "/assets/aiv/ui/icon-scrip.png",
-  wait: "/assets/aiv/ui/icon-help.png",
-  happy: "/assets/aiv/ui/icon-health.png",
-  upset: "/assets/aiv/ui/icon-energy.png",
-  work: "/assets/aiv/ui/icon-brick.png"
-};
 
 // ───────────────────────────── helpers ─────────────────────────────
 
@@ -147,25 +117,85 @@ function wrapText(text: string, maxPx: number, fontPx: number, maxLines = 4): st
   return lines.slice(0, maxLines).join("\n");
 }
 
+interface Pt {
+  x: number;
+  y: number;
+}
+const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** a polyline in world px with its cumulative length */
+interface Walk {
+  pts: Pt[];
+  len: number;
+}
+
+function makeWalk(pts: Pt[]): Walk {
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) len += dist(pts[i - 1], pts[i]);
+  return { pts, len };
+}
+
+function tilesToWalk(tiles: TilePoint[], start?: Pt, end?: Pt): Walk {
+  const pts = tiles.map(tileToWorld);
+  if (start) pts.unshift(start);
+  if (end) pts.push(end);
+  return makeWalk(pts);
+}
+
+interface PathSample {
+  x: number;
+  y: number;
+  /** unit direction of travel at this point */
+  dx: number;
+  dy: number;
+}
+
+/** point `d` px along a walk (clamped to its ends) */
+function pointAlong(walk: Walk, d: number): PathSample {
+  const pts = walk.pts;
+  if (pts.length === 1) return { x: pts[0].x, y: pts[0].y, dx: 0, dy: 0 };
+  let remain = Math.max(0, d);
+  for (let i = 1; i < pts.length; i++) {
+    const seg = dist(pts[i - 1], pts[i]);
+    if (remain <= seg || i === pts.length - 1) {
+      const t = seg === 0 ? 1 : Math.min(1, remain / seg);
+      const dx = seg === 0 ? 0 : (pts[i].x - pts[i - 1].x) / seg;
+      const dy = seg === 0 ? 0 : (pts[i].y - pts[i - 1].y) / seg;
+      return { x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t, y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t, dx, dy };
+    }
+    remain -= seg;
+  }
+  const last = pts[pts.length - 1];
+  return { x: last.x, y: last.y, dx: 0, dy: 0 };
+}
+
+function dirFromVec(dx: number, dy: number, prev: Direction): Direction {
+  if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) return prev;
+  // keep the current facing when the other axis only wins by a hair (no flicker on diagonals)
+  if (Math.abs(dx) > Math.abs(dy) * 1.15) return dx > 0 ? "right" : "left";
+  if (Math.abs(dy) > Math.abs(dx) * 1.15) return dy > 0 ? "down" : "up";
+  return prev;
+}
+
 // day / night grade -----------------------------------------------------------
 
 interface Grade {
-  bright: number; // colour-matrix brightness on the map (1 = artwork as is)
+  bright: number; // lifts the artwork towards "day" (1 = as is)
   night: number; // blue overlay alpha
   warm: number; // warm overlay alpha
   warmColor: number;
 }
 
 const GRADE_KEYS: { h: number; g: Grade }[] = [
-  { h: 0, g: { bright: 0.92, night: 0.36, warm: 0, warmColor: 0xff9a4a } },
-  { h: 5, g: { bright: 0.94, night: 0.32, warm: 0, warmColor: 0xff9a4a } },
-  { h: 6.5, g: { bright: 1.14, night: 0.1, warm: 0.2, warmColor: 0xff9a5a } },
-  { h: 8, g: { bright: 1.32, night: 0, warm: 0.06, warmColor: 0xffd890 } },
-  { h: 16.5, g: { bright: 1.32, night: 0, warm: 0.06, warmColor: 0xffd890 } },
-  { h: 18, g: { bright: 1.14, night: 0.05, warm: 0.26, warmColor: 0xff8a40 } },
-  { h: 19.5, g: { bright: 1.0, night: 0.16, warm: 0.2, warmColor: 0xff7a40 } },
-  { h: 22, g: { bright: 0.93, night: 0.33, warm: 0, warmColor: 0xff9a4a } },
-  { h: 24, g: { bright: 0.92, night: 0.36, warm: 0, warmColor: 0xff9a4a } }
+  { h: 0, g: { bright: 0.92, night: 0.4, warm: 0, warmColor: 0xff9a4a } },
+  { h: 5, g: { bright: 0.94, night: 0.36, warm: 0, warmColor: 0xff9a4a } },
+  { h: 6.5, g: { bright: 1.1, night: 0.12, warm: 0.16, warmColor: 0xff9a5a } },
+  { h: 8, g: { bright: 1.0, night: 0, warm: 0.04, warmColor: 0xffd890 } },
+  { h: 16.5, g: { bright: 1.0, night: 0, warm: 0.04, warmColor: 0xffd890 } },
+  { h: 18, g: { bright: 1.0, night: 0.06, warm: 0.2, warmColor: 0xff8a40 } },
+  { h: 19.5, g: { bright: 1.0, night: 0.18, warm: 0.16, warmColor: 0xff7a40 } },
+  { h: 22, g: { bright: 0.93, night: 0.37, warm: 0, warmColor: 0xff9a4a } },
+  { h: 24, g: { bright: 0.92, night: 0.4, warm: 0, warmColor: 0xff9a4a } }
 ];
 
 function gradeAt(hour: number): Grade {
@@ -195,10 +225,14 @@ interface BubbleView {
 }
 
 interface CatchUp {
-  pts: Pt[];
-  len: number;
+  walk: Walk;
   dur: number;
   t: number;
+}
+
+interface Wander {
+  walk: Walk;
+  d: number;
 }
 
 interface Resident {
@@ -209,7 +243,8 @@ interface Resident {
   shadow: Phaser.GameObjects.Image;
   ring: Phaser.GameObjects.Image | null;
   sel: Phaser.GameObjects.Image;
-  sprite: Phaser.GameObjects.Image;
+  sprite: Phaser.GameObjects.Sprite;
+  texture: string;
   top: Phaser.GameObjects.Container; // label + emote + bubble (kept above all sprites)
   label: Phaser.GameObjects.Text;
   emoteBg: Phaser.GameObjects.Image;
@@ -218,18 +253,15 @@ interface Resident {
   bubble: BubbleView | null;
   bubbleSeenAt: number | null;
   // motion
-  x: number;
+  x: number; // feet, world px
   y: number;
-  vx: number;
-  facing: 1 | -1;
-  phase: number;
+  dir: Direction;
   walking: boolean;
   speedEma: number;
   fresh: boolean; // first frame: snap to target
   locShown: LocationId | null;
   travelKey: string | null;
-  travelPath: Pt[] | null;
-  travelLen: number;
+  travelWalk: Walk | null;
   catchUp: CatchUp | null;
   slotLoc: LocationId | null;
   slotIdx: number;
@@ -237,9 +269,7 @@ interface Resident {
   rng: () => number;
   wx: number;
   wy: number;
-  wtx: number;
-  wty: number;
-  wMoving: boolean;
+  wander: Wander | null;
   wUntil: number;
   wBase: Pt | null;
   breathe: number;
@@ -247,30 +277,49 @@ interface Resident {
   liftCur: number;
 }
 
+interface Dog {
+  sprite: Phaser.GameObjects.Sprite;
+  shadow: Phaser.GameObjects.Image;
+  x: number;
+  y: number;
+  walk: Walk | null;
+  d: number;
+  until: number;
+  lying: boolean;
+}
+
 // ───────────────────────────── the scene ─────────────────────────────
 
 export class TownScene extends Phaser.Scene implements TownApi {
-  private opts: TownSceneOptions;
+  private model!: TownModel;
+  private finder!: PathFinder;
+  private walkSets = {} as Record<LocationId, Set<number>>;
+  private mapW = 1024;
+  private mapH = 672;
+  private debug = false;
+
   private snapshot: GameSnapshot | null = null;
   private receivedAt = 0;
   private ready = false;
   private residents = new Map<string, Resident>();
+  private dog: Dog | null = null;
   private uiLayer!: Phaser.GameObjects.Container;
-  private mapImg!: Phaser.GameObjects.Image;
   private dayLight!: Phaser.GameObjects.Rectangle;
   private warmOverlay!: Phaser.GameObjects.Rectangle;
   private nightOverlay!: Phaser.GameObjects.Rectangle;
-  private mapFallback = false;
+  private hoverGfx!: Phaser.GameObjects.Graphics;
+  private hoverTip!: Phaser.GameObjects.Text;
+  private hovered: Interactable | null = null;
+  private placeLabels: { id: LocationId; text: Phaser.GameObjects.Text; ax: number; ay: number }[] = [];
   private grade: Grade | null = null;
   private lastGradeKey = "";
   private selectedId: string | null = null;
   private followId: string | null = null;
   private labelRes = 2;
   // camera
-  private minZoom = 0.5;
-  /** screen px covered by HUD on each side; the camera may scroll that far past
-   *  the map edge so a resident near the edge can be brought into view, and
-   *  follow/focus centre the target in the uncovered area */
+  private minZoom = 1;
+  /** screen px covered by HUD on each side; the camera may scroll that far past the map edge so a resident near
+   *  the edge can be brought into view, and follow/focus centre the target in the uncovered area */
   private safe = { l: 0, r: 0, t: 0, b: 0 };
   private userZoomed = false;
   private zoomAnim: { target: number; sx: number; sy: number } | null = null;
@@ -279,14 +328,12 @@ export class TownScene extends Phaser.Scene implements TownApi {
   private downAt: { x: number; y: number } | null = null;
   private dragged = false;
   private pinch: { dist: number } | null = null;
-  private debugGfx: Phaser.GameObjects.Graphics | null = null;
 
-  constructor(opts: TownSceneOptions = {}) {
-    super({ key: "town" });
-    this.opts = opts;
+  constructor() {
+    super({ key: SCENES.town });
   }
 
-  // ───────────── api (called from React) ─────────────
+  // ───────────── api (called through the EventBus) ─────────────
 
   setSnapshot(snapshot: GameSnapshot | null): void {
     this.snapshot = snapshot;
@@ -300,69 +347,57 @@ export class TownScene extends Phaser.Scene implements TownApi {
 
   setFollow(id: string | null): void {
     this.followId = id;
-    if (id && this.ready) this.startCamAnim(id, Math.max(this.cameras.main.zoom, Math.min(1.4, this.minZoom * 1.45)));
+    if (id && this.ready) this.startCamAnim(id, Math.max(this.cameras.main.zoom, this.defaultZoom()));
   }
 
   focusAgent(id: string): void {
     if (!this.ready) return;
     this.followId = null;
-    this.startCamAnim(id, Math.max(this.cameras.main.zoom, Math.min(1.4, this.minZoom * 1.45)));
-  }
-
-  setCallbacks(cb: TownSceneCallbacks): void {
-    this.opts = { ...this.opts, ...cb };
+    this.startCamAnim(id, Math.max(this.cameras.main.zoom, this.defaultZoom()));
   }
 
   // ───────────── phaser lifecycle ─────────────
 
-  preload(): void {
-    this.load.on("progress", (v: number) => this.opts.onProgress?.(v));
-    this.load.on("loaderror", (file: Phaser.Loader.File) => {
-      // the lighter webp is preferred; fall back to the png if it cannot be fetched
-      if (file.key === "map" && !this.mapFallback) {
-        this.mapFallback = true;
-        this.load.image("map", "/assets/polis-pixel-town-map.png");
-      }
-    });
-    this.load.image("map", "/assets/polis-pixel-town-map.webp");
-    for (const k of SPRITE_KEYS) this.load.image(`spr-${k}`, `/assets/polis-sprites/${k}.png`);
-    for (const [k, src] of Object.entries(EMOTE_PNG)) this.load.image(`emote-${k}`, src);
-  }
-
   create(): void {
+    this.debug = this.registry.get("debug") === true;
     // (the canvas renderer ignores text resolution when drawing, so keep it 1 there)
     this.labelRes = this.game.renderer.type === Phaser.WEBGL ? Math.max(2, Math.min(3, Math.ceil(window.devicePixelRatio || 1))) : 1;
-    const cam = this.cameras.main;
-    cam.setBackgroundColor("#0b1020");
-    cam.setBounds(0, 0, MAP_W, MAP_H);
-    cam.setRoundPixels(false);
 
-    // smooth scaling for the artwork (it is shown below 1:1 most of the time)
-    for (const key of ["map", ...SPRITE_KEYS.map((k) => `spr-${k}`), ...Object.keys(EMOTE_PNG).map((k) => `emote-${k}`)]) {
-      if (this.textures.exists(key)) this.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    // data model + path finder from the very same map the tile layers are drawn from
+    const raw = this.cache.tilemap.get(KEYS.map).data as TiledMap;
+    this.model = buildTownModel(raw);
+    this.finder = new PathFinder(this.model.grid, 512);
+    this.mapW = this.model.pxWidth;
+    this.mapH = this.model.pxHeight;
+    for (const [id, loc] of Object.entries(this.model.locations)) {
+      this.walkSets[id as LocationId] = new Set(loc.walkTiles.map((t) => t.y * this.model.width + t.x));
     }
 
+    const cam = this.cameras.main;
+    cam.setBackgroundColor(BG_COLOR);
+    cam.setBounds(0, 0, this.mapW, this.mapH);
+    cam.setRoundPixels(true);
+
+    this.buildMap();
     this.makeTextures();
+    this.buildOverlays();
+    this.buildDog();
 
-    this.mapImg = this.add.image(0, 0, "map").setOrigin(0, 0).setDepth(0);
-    if (this.mapImg.width !== MAP_W) this.mapImg.setDisplaySize(MAP_W, MAP_H);
+    this.uiLayer = this.add.container(0, 0).setDepth(DEPTH.ui);
+    this.buildPlaceLabels();
+    this.hoverGfx = this.add.graphics().setDepth(DEPTH.hover);
+    this.hoverTip = this.add
+      .text(0, 0, "", { fontFamily: FONT, fontSize: "15px", fontStyle: "bold", color: "#f2c75c", stroke: "#0b1020", strokeThickness: 5 })
+      .setOrigin(0.5, 1)
+      .setResolution(this.labelRes)
+      .setVisible(false);
+    this.uiLayer.add(this.hoverTip);
 
-    // Day / night grade as overlays above the map (same look in WebGL and canvas). A preFX colour matrix
-    // would be neater, but preFX renders through a screen-sized buffer and clips any big object that is
-    // partly off-screen — which a zoomed / panned map always is.
-    this.dayLight = this.add
-      .rectangle(0, 0, MAP_W, MAP_H, 0xfff3d6, 0)
-      .setOrigin(0, 0)
-      .setDepth(1)
-      .setBlendMode(Phaser.BlendModes.SCREEN);
-    this.warmOverlay = this.add.rectangle(0, 0, MAP_W, MAP_H, 0xff9a4a, 0).setOrigin(0, 0).setDepth(2);
-    this.nightOverlay = this.add.rectangle(0, 0, MAP_W, MAP_H, 0x0a1448, 0).setOrigin(0, 0).setDepth(3);
-
-    this.uiLayer = this.add.container(0, 0).setDepth(20000);
-
-    if (this.opts.debug) {
-      this.drawDebug();
+    if (this.debug) this.drawDebug();
+    if (this.debug || process.env.NODE_ENV !== "production") {
+      // dev handles for QA scripts: the scene, and the bus (to silence snapshots while staging a walk)
       (window as unknown as { __town?: TownScene }).__town = this;
+      (window as unknown as { __townBus?: typeof EventBus }).__townBus = EventBus;
     }
 
     this.input.setDefaultCursor("grab");
@@ -373,17 +408,43 @@ export class TownScene extends Phaser.Scene implements TownApi {
     this.input.on("pointerupoutside", this.onPointerUp, this);
     this.input.on("wheel", this.onWheel, this);
     this.scale.on("resize", this.onResize, this);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+
+    // React -> Phaser commands
+    EventBus.on("cmd-snapshot", this.setSnapshot, this);
+    EventBus.on("cmd-select", this.setSelected, this);
+    EventBus.on("cmd-follow", this.setFollow, this);
+    EventBus.on("cmd-focus", this.focusAgent, this);
+    const unhook = () => {
       this.scale.off("resize", this.onResize, this);
-    });
+      EventBus.off("cmd-snapshot", this.setSnapshot, this);
+      EventBus.off("cmd-select", this.setSelected, this);
+      EventBus.off("cmd-follow", this.setFollow, this);
+      EventBus.off("cmd-focus", this.focusAgent, this);
+    };
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, unhook);
+    this.events.once(Phaser.Scenes.Events.DESTROY, unhook);
 
     this.onResize();
-    cam.setZoom(this.minZoom);
-    cam.centerOn(MAP_W / 2, MAP_H / 2);
+    cam.setZoom(clamp(this.defaultZoom(), this.minZoom, MAX_ZOOM));
+    cam.centerOn(this.mapW / 2, this.mapH / 2);
 
     this.ready = true;
     this.syncResidents();
-    this.opts.onReady?.();
+    EventBus.emit("scene-ready");
+  }
+
+  // ───────────── map ─────────────
+
+  private buildMap(): void {
+    const map = this.make.tilemap({ key: KEYS.map });
+    const tileset = map.addTilesetImage(KEYS.tilesetName, KEYS.tileset, 16, 16, 1, 2);
+    if (!tileset) throw new Error("town tileset missing");
+    MAP_LAYERS.forEach((name) => {
+      const layer = map.createLayer(name, tileset, 0, 0);
+      layer?.setDepth(DEPTH[name]);
+    });
+    // roofs, canopies, torii beams: above every resident, so residents walk behind them
+    map.createLayer(MAP_ABOVE_LAYER, tileset, 0, 0)?.setDepth(DEPTH.above);
   }
 
   // ───────────── textures ─────────────
@@ -445,7 +506,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
       c.stroke();
     });
     // pixel glyph emotes that have no icon asset
-    const glyph = (key: string, bg: string, fg: string, rows: string[], px: number) => {
+    const glyph = (key: string, rows: string[], px: number, fg: string) => {
       mk(key, 64, 64, (c) => {
         c.fillStyle = fg;
         const w = rows[0].length * px;
@@ -455,33 +516,121 @@ export class TownScene extends Phaser.Scene implements TownApi {
         rows.forEach((row, y) => {
           for (let x = 0; x < row.length; x++) if (row[x] === "X") c.fillRect(ox + x * px, oy + y * px, px, px);
         });
-        void bg;
       });
     };
-    glyph("emote-sleep", "#cfe0ff", "#3452b0", [
-      "XXXXX......",
-      "...X.......",
-      "..X....XXX.",
-      ".X......X..",
-      "XXXXX..XXX."
-    ].map((r) => r.padEnd(11, ".")), 5);
-    glyph("emote-alert", "#ff7a6a", "#d1322a", [
-      ".XX.",
-      ".XX.",
-      ".XX.",
-      ".XX.",
-      ".XX.",
-      "....",
-      ".XX."
-    ], 7);
+    glyph("emote-sleep", ["XXXXX......", "...X.......", "..X....XXX.", ".X......X..", "XXXXX..XXX."].map((r) => r.padEnd(11, ".")), 5, "#3452b0");
+    glyph("emote-alert", [".XX.", ".XX.", ".XX.", ".XX.", ".XX.", "....", ".XX."], 7, "#d1322a");
+  }
+
+  // ───────────── overlays: day / night ─────────────
+
+  private buildOverlays(): void {
+    // World-space rectangles far larger than the map (the camera may scroll past the edge by the HUD footprint).
+    // Above every layer *and* resident, below the UI: the whole picture gets the grade. (A preFX colour matrix would
+    // be neater, but preFX renders through a screen-sized buffer and clips big objects that are partly off-screen.)
+    const pad = 2400;
+    const mkRect = (color: number, depth: number) => this.add.rectangle(-pad, -pad, this.mapW + pad * 2, this.mapH + pad * 2, color, 0).setOrigin(0, 0).setDepth(depth);
+    this.dayLight = mkRect(0xfff3d6, DEPTH.grade).setBlendMode(Phaser.BlendModes.SCREEN);
+    this.warmOverlay = mkRect(0xff9a4a, DEPTH.grade + 1);
+    this.nightOverlay = mkRect(0x0a1448, DEPTH.grade + 2);
+  }
+
+  // ───────────── ambient: the town dog ─────────────
+
+  private buildDog(): void {
+    if (!this.textures.exists("char-dog")) return;
+    const start = this.model.locations.plaza.slots[3] ?? this.model.locations.plaza.door;
+    if (!start) return;
+    const p = tileToWorld(start);
+    const shadow = this.add.image(p.x, p.y, "shadow").setScale(0.2, 0.22).setAlpha(0.8).setDepth(DEPTH.residents - 1);
+    const sprite = this.add.sprite(p.x, p.y, "char-dog", 0).setOrigin(0.5, 1);
+    sprite.anims.play("dog:sit");
+    this.dog = { sprite, shadow, x: p.x, y: p.y, walk: null, d: 0, until: performance.now() + 2000, lying: false };
+  }
+
+  private updateDog(dt: number, nowMs: number): void {
+    const dog = this.dog;
+    if (!dog) return;
+    if (dog.walk) {
+      dog.d += 24 * dt;
+      const s = pointAlong(dog.walk, dog.d);
+      dog.x = s.x;
+      dog.y = s.y;
+      if (Math.abs(s.dx) > 0.1) dog.sprite.setFlipX(s.dx < 0);
+      if (dog.d >= dog.walk.len) {
+        dog.walk = null;
+        dog.until = nowMs + 4000 + Math.random() * 7000;
+        dog.lying = Math.random() < 0.5;
+      }
+    } else if (nowMs >= dog.until) {
+      const here = worldToTile(dog.x, dog.y);
+      const plaza = this.model.locations.plaza.walkTiles;
+      const hall = this.model.locations.hall.walkTiles;
+      const pool = Math.random() < 0.7 ? plaza : hall;
+      const target = pool[Math.floor(Math.random() * pool.length)];
+      const path = target ? this.finder.find(here, target) : null;
+      if (path && path.length > 1) {
+        dog.walk = tilesToWalk(path, { x: dog.x, y: dog.y });
+        dog.d = 0;
+        dog.lying = false;
+      } else dog.until = nowMs + 3000;
+    }
+    const hop = dog.walk ? Math.abs(Math.sin(performance.now() / 70)) * 1.6 : 0;
+    dog.sprite.anims.play(dog.lying && !dog.walk ? "dog:lie" : "dog:sit", true);
+    dog.sprite.setPosition(Math.round(dog.x), Math.round(dog.y - hop));
+    dog.sprite.setDepth(DEPTH.residents + dog.y);
+    dog.shadow.setPosition(Math.round(dog.x), Math.round(dog.y - 1));
+  }
+
+  // ───────────── place labels / hover ─────────────
+
+  private buildPlaceLabels(): void {
+    // one small plaque per location, above its biggest building / landmark (houses get theirs on hover only)
+    for (const id of Object.keys(this.model.locations) as LocationId[]) {
+      if (id === "home") continue;
+      const its = this.model.interactables.filter((i) => i.location === id);
+      if (its.length === 0) continue;
+      const big = its.reduce((a, b) => (b.rect.w * b.rect.h > a.rect.w * a.rect.h ? b : a));
+      const text = this.add
+        .text(0, 0, this.model.locations[id].label, { fontFamily: FONT, fontSize: "12px", fontStyle: "bold", color: "#fff3d0", stroke: "#2b1a0c", strokeThickness: 4 })
+        .setOrigin(0.5, 1)
+        .setResolution(this.labelRes)
+        .setAlpha(0.92);
+      this.uiLayer.add(text);
+      this.placeLabels.push({ id, text, ax: big.rect.x + big.rect.w / 2, ay: big.rect.y + 2 });
+    }
+  }
+
+  private updatePlaceLabels(): void {
+    const zoom = this.cameras.main.zoom;
+    const s = clamp(1 / zoom, 0.18, 1.2);
+    const show = zoom <= 3.4;
+    for (const l of this.placeLabels) {
+      l.text.setVisible(show && this.hovered?.location !== l.id);
+      l.text.setScale(s);
+      l.text.setPosition(Math.round(l.ax), Math.round(l.ay - 2 / zoom));
+    }
+    // hover plaque + highlight
+    const h = this.hovered;
+    this.hoverGfx.clear();
+    if (!h) {
+      this.hoverTip.setVisible(false);
+      return;
+    }
+    const t = this.time.now / 1000;
+    const pulse = 0.55 + 0.45 * Math.sin(t * 6);
+    const r = h.rect;
+    this.hoverGfx.fillStyle(0xfff3c4, 0.1 + 0.06 * pulse);
+    this.hoverGfx.fillRoundedRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2, 3);
+    this.hoverGfx.lineStyle(Math.max(1, 1.6 / zoom), GOLD, 0.7 + 0.3 * pulse);
+    this.hoverGfx.strokeRoundedRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2, 3);
+    this.hoverTip.setText(this.model.locations[h.location].label);
+    this.hoverTip.setVisible(true);
+    this.hoverTip.setScale(clamp(1 / zoom, 0.18, 1.2));
+    this.hoverTip.setPosition(Math.round(r.x + r.w / 2), Math.round(r.y - 3 / zoom));
   }
 
   // ───────────── residents ─────────────
-
-  private spriteKeyFor(a: AgentView): string {
-    const k = `spr-${a.sprite}`;
-    return this.textures.exists(k) ? k : "spr-rookie";
-  }
 
   private allAgents(): AgentView[] {
     const snap = this.snapshot;
@@ -522,7 +671,8 @@ export class TownScene extends Phaser.Scene implements TownApi {
           // wait for the first update so the resident has a position
           this.time.delayedCall(30, () => {
             if (this.camAnim || this.followId) return;
-            this.cameras.main.centerOn(res.x, res.y - 20);
+            const c = this.safeCenterFor(res.x, res.y - 8);
+            this.setCenter(c.x, c.y);
           });
         }
       }
@@ -531,14 +681,12 @@ export class TownScene extends Phaser.Scene implements TownApi {
 
   private createResident(a: AgentView): Resident {
     const isMe = a.isPlayer;
+    const texture = spriteTexture(a.sprite);
     const root = this.add.container(0, 0);
-    const shadow = this.add.image(0, 0, "shadow").setOrigin(0.5, 0.5).setScale(1.0, 1.0).setAlpha(0.9);
-    const ring = isMe ? this.add.image(0, 2, "ring-gold").setOrigin(0.5, 0.5).setScale(0.78) : null;
-    const sel = this.add.image(0, 2, "ring-sel").setOrigin(0.5, 0.5).setScale(0.78).setVisible(false);
-    const sprite = this.add
-      .image(0, 0, this.spriteKeyFor(a))
-      .setOrigin(0.5, 0.975)
-      .setScale(SPRITE_SCALE);
+    const shadow = this.add.image(0, -1, "shadow").setOrigin(0.5, 0.5).setScale(0.26, 0.26).setAlpha(0.9);
+    const ring = isMe ? this.add.image(0, 0, "ring-gold").setOrigin(0.5, 0.5).setScale(0.3) : null;
+    const sel = this.add.image(0, 0, "ring-sel").setOrigin(0.5, 0.5).setScale(0.3).setVisible(false);
+    const sprite = this.add.sprite(0, 0, texture, frameIndex("down")).setOrigin(0.5, 1);
     root.add([shadow]);
     if (ring) root.add(ring);
     root.add([sel, sprite]);
@@ -557,12 +705,12 @@ export class TownScene extends Phaser.Scene implements TownApi {
       .setResolution(this.labelRes);
     label.setShadow(0, 1, "#000000", 2, true, true);
     const emoteBg = this.add.image(0, -22, "emote-bg").setScale(0.78).setVisible(false);
-    const emoteIcon = this.add.image(0, -22, "emote-think").setDisplaySize(18, 18).setVisible(false);
+    const emoteIcon = this.add.image(0, -22, emoteTexture("think")).setDisplaySize(18, 18).setVisible(false);
     top.add([label, emoteBg, emoteIcon]);
     this.uiLayer.add(top);
 
     const seed = hashStr(a.id);
-    const res: Resident = {
+    return {
       id: a.id,
       data: a,
       root,
@@ -570,6 +718,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
       ring,
       sel,
       sprite,
+      texture,
       top,
       label,
       emoteBg,
@@ -579,38 +728,35 @@ export class TownScene extends Phaser.Scene implements TownApi {
       bubbleSeenAt: null,
       x: 0,
       y: 0,
-      vx: 0,
-      facing: 1,
-      phase: (seed % 628) / 100,
+      dir: "down",
       walking: false,
       speedEma: 0,
       fresh: true,
       locShown: null,
       travelKey: null,
-      travelPath: null,
-      travelLen: 0,
+      travelWalk: null,
       catchUp: null,
       slotLoc: null,
       slotIdx: -1,
       rng: mulberry32(seed),
       wx: 0,
       wy: 0,
-      wtx: 0,
-      wty: 0,
-      wMoving: false,
+      wander: null,
       wUntil: 0,
       wBase: null,
       breathe: (seed % 100) / 15,
       lift: 0,
       liftCur: 0
     };
-    return res;
   }
 
   private applyData(res: Resident, a: AgentView): void {
     const prev = res.data;
     res.data = a;
-    if (prev.sprite !== a.sprite) res.sprite.setTexture(this.spriteKeyFor(a));
+    if (prev.sprite !== a.sprite) {
+      res.texture = spriteTexture(a.sprite);
+      res.sprite.setTexture(res.texture, frameIndex(res.dir));
+    }
     if (prev.name !== a.name || prev.isPlayer !== a.isPlayer) res.label.setText(a.isPlayer ? `★ ${a.name}` : a.name);
     // bubbles: a new atMs means a new line; on first sight only show fresh ones
     const b = a.bubble;
@@ -691,9 +837,10 @@ export class TownScene extends Phaser.Scene implements TownApi {
         res.emoteBg.setVisible(false);
         res.emoteIcon.setVisible(false);
       } else {
-        const tex = `emote-${key}`;
+        const tex = key === "sleep" || key === "alert" ? `emote-${key}` : emoteTexture(key);
         if (this.textures.exists(tex)) {
-          res.emoteIcon.setTexture(tex).setVisible(true).setDisplaySize(key === "sleep" || key === "alert" ? 20 : 18, key === "sleep" || key === "alert" ? 20 : 18);
+          const px = key === "sleep" || key === "alert" ? 20 : 18;
+          res.emoteIcon.setTexture(tex).setVisible(true).setDisplaySize(px, px);
           res.emoteBg.setVisible(true);
         } else {
           res.emoteBg.setVisible(false);
@@ -705,14 +852,24 @@ export class TownScene extends Phaser.Scene implements TownApi {
 
   // ───────────── slots ─────────────
 
-  private slotPoint(res: Resident, loc: LocationId): Pt {
-    const home = res.data.homeSlot;
-    if (loc === "home") return homeDoor(home);
-    const slots = slotsOf(loc);
-    if (res.slotLoc !== loc || res.slotIdx < 0) {
+  /** a location id we can place on the map (anything unknown falls back to the plaza) */
+  private safeLoc(id: LocationId): LocationId {
+    return this.model.locations[id] ? id : "plaza";
+  }
+
+  private slotTiles(loc: LocationId, homeSlot: number): TilePoint[] {
+    if (loc === "home") return [this.model.homeDoors[((Math.floor(homeSlot) % 9) + 9) % 9].tile];
+    const l = this.model.locations[loc];
+    return l.slots.length > 0 ? l.slots : l.door ? [l.door] : [{ x: 1, y: 1 }];
+  }
+
+  private slotTile(res: Resident, loc: LocationId): TilePoint {
+    const slots = this.slotTiles(loc, res.data.homeSlot);
+    if (loc === "home") return slots[0];
+    if (res.slotLoc !== loc || res.slotIdx < 0 || res.slotIdx >= slots.length) {
       // pick the free slot that is farthest from everybody already standing here
       const takenIdx = new Set<number>();
-      const takenPts: Pt[] = [];
+      const takenPts: TilePoint[] = [];
       for (const o of this.residents.values()) {
         if (o !== res && o.slotLoc === loc && o.slotIdx >= 0) {
           takenIdx.add(o.slotIdx);
@@ -725,7 +882,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
       for (let k = 0; k < slots.length; k++) {
         const idx = (start + k) % slots.length;
         if (takenIdx.has(idx)) continue;
-        const d = takenPts.length === 0 ? 1 : Math.min(...takenPts.map((t) => dist(t, slots[idx])));
+        const d = takenPts.length === 0 ? 1 : Math.min(...takenPts.map((t) => Math.hypot(t.x - slots[idx].x, t.y - slots[idx].y)));
         if (d > bestD + 0.5) {
           bestD = d;
           pick = idx;
@@ -743,123 +900,144 @@ export class TownScene extends Phaser.Scene implements TownApi {
     res.slotIdx = -1;
   }
 
+  private entryTile(loc: LocationId, homeSlot: number): TilePoint {
+    return loc === "home" ? this.slotTiles("home", homeSlot)[0] : (this.model.locations[loc].door ?? this.slotTiles(loc, homeSlot)[0]);
+  }
+
+  /** a free walkable tile next to `t` inside the location (collaborators stand side by side) */
+  private neighbourTile(loc: LocationId, t: TilePoint): TilePoint {
+    const set = this.walkSets[loc];
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1]]) {
+      const x = t.x + dx;
+      const y = t.y + dy;
+      if (set.has(y * this.model.width + x)) return { x, y };
+    }
+    return t;
+  }
+
   // ───────────── per-frame resident logic ─────────────
 
+  private tileKey(t: TilePoint): number {
+    return t.y * this.model.width + t.x;
+  }
+
   /** where this resident *should* be right now, according to logical state */
-  private logicalTarget(res: Resident, simNow: number, dt: number, nowMs: number): { x: number; y: number; travelling: boolean; dirX: number } {
+  private logicalTarget(res: Resident, simNow: number, dt: number, nowMs: number): { x: number; y: number; travelling: boolean; dirX: number; dirY: number } {
     const a = res.data;
-    const loc = a.location;
+    const loc = this.safeLoc(a.location);
     const home = a.homeSlot;
 
-    // 1. on the road
+    // 1. on the road: walk the A* route between the two stand points, the elapsed fraction of the trip along it
     if (a.travel) {
-      const tr = a.travel;
+      const tr = { ...a.travel, from: this.safeLoc(a.travel.from), to: this.safeLoc(a.travel.to) };
       const key = `${tr.from}>${tr.to}@${tr.startMs}`;
-      if (res.travelKey !== key || !res.travelPath) {
+      if (res.travelKey !== key || !res.travelWalk) {
         res.travelKey = key;
-        res.travelPath = pathBetween(tr.from, tr.to, home, home);
-        res.travelLen = pathLength(res.travelPath);
+        this.releaseSlot(res);
+        const from = this.entryTile(tr.from, home);
+        const to = this.slotTile(res, tr.to); // reserves the slot the resident will occupy on arrival
+        const tiles = this.finder.find(from, to) ?? [from, to];
+        res.travelWalk = tilesToWalk(tiles);
       }
       const span = Math.max(1, tr.endMs - tr.startMs);
       const p = clamp((simNow - tr.startMs) / span, 0, 1);
-      const s = pointAlong(res.travelPath, p * res.travelLen);
+      const s = pointAlong(res.travelWalk, p * res.travelWalk.len);
       res.locShown = tr.to; // when the road ends we are *at* the destination already
       res.catchUp = null;
-      this.releaseSlot(res);
+      res.wander = null;
       res.wBase = null;
-      return { x: s.x, y: s.y, travelling: p < 1, dirX: s.dx };
+      return { x: s.x, y: s.y, travelling: p < 1, dirX: s.dx, dirY: s.dy };
     }
     res.travelKey = null;
-    res.travelPath = null;
+    res.travelWalk = null;
 
-    // 2. location changed without travel info (fast-forward jump etc.) → walk there along the graph, quickly
+    // 2. location changed without travel info (fast-forward jump etc.) → walk there along the roads, quickly
     if (res.locShown !== loc) {
       const first = res.locShown === null;
-      const base = this.standBase(res, loc);
+      const base = this.standTile(res, loc);
+      const basePx = tileToWorld(base);
       if (!first && !res.fresh) {
         const from = { x: res.x, y: res.y };
-        if (dist(from, base) > 30) {
-          const pts = pathFromPoint(from, loc, home);
-          pts.push(base);
-          const len = pathLength(pts);
-          res.catchUp = { pts, len, dur: clamp(len / 240, 0.5, CATCHUP_MAX_S), t: 0 };
+        if (dist(from, basePx) > 20) {
+          const tiles = this.finder.find(worldToTile(from.x, from.y), base);
+          if (tiles) {
+            const walk = tilesToWalk(tiles, from, undefined);
+            res.catchUp = { walk, dur: clamp(walk.len / CATCHUP_SPEED, 0.6, CATCHUP_MAX_S), t: 0 };
+          }
         }
       }
       res.locShown = loc;
       res.wBase = null;
+      res.wander = null;
     }
     if (res.catchUp) {
       const c = res.catchUp;
       c.t += dt;
       const k = clamp(c.t / c.dur, 0, 1);
-      const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; // ease in-out
-      const s = pointAlong(c.pts, e * c.len);
+      const s = pointAlong(c.walk, k * c.walk.len);
       if (k >= 1) res.catchUp = null;
-      return { x: s.x, y: s.y, travelling: true, dirX: s.dx };
+      return { x: s.x, y: s.y, travelling: true, dirX: s.dx, dirY: s.dy };
     }
 
     // 3. standing at the location (collaborating, sleeping, waiting are still)
-    const base = this.standBase(res, loc);
+    const base = tileToWorld(this.standTile(res, loc));
     const still = a.activity === "sleeping" || a.activity === "waiting" || a.activity === "collaborating" || loc === "home";
     if (still) {
       res.wBase = base;
       res.wx = base.x;
       res.wy = base.y;
-      res.wMoving = false;
-      return { x: base.x, y: base.y, travelling: false, dirX: 0 };
+      res.wander = null;
+      return { x: base.x, y: base.y, travelling: false, dirX: 0, dirY: 0 };
     }
-    // gentle micro wander around the stand point, never leaving the location's areas
+    // gentle micro wander around the stand point, along tiles of the location's own area
     if (!res.wBase || dist(res.wBase, base) > 1) {
       res.wBase = base;
       res.wx = base.x;
       res.wy = base.y;
-      res.wMoving = false;
+      res.wander = null;
       res.wUntil = nowMs + 800 + res.rng() * 3500;
     }
-    if (res.wMoving) {
-      const dx = res.wtx - res.wx;
-      const dy = res.wty - res.wy;
-      const d = Math.hypot(dx, dy);
-      const step = 15 * dt;
-      if (d <= step) {
-        res.wx = res.wtx;
-        res.wy = res.wty;
-        res.wMoving = false;
+    if (res.wander) {
+      const w = res.wander;
+      w.d += WANDER_SPEED * dt;
+      const s = pointAlong(w.walk, w.d);
+      res.wx = s.x;
+      res.wy = s.y;
+      if (w.d >= w.walk.len) {
+        res.wander = null;
         res.wUntil = nowMs + 2200 + res.rng() * 5200;
-      } else {
-        res.wx += (dx / d) * step;
-        res.wy += (dy / d) * step;
       }
-      return { x: res.wx, y: res.wy, travelling: false, dirX: dx };
+      return { x: res.wx, y: res.wy, travelling: false, dirX: s.dx, dirY: s.dy };
     }
     if (nowMs >= res.wUntil) {
-      for (let tries = 0; tries < 8; tries++) {
-        const ang = res.rng() * Math.PI * 2;
-        const rad = 8 + res.rng() * 12;
-        const cand = { x: base.x + Math.cos(ang) * rad, y: base.y + Math.sin(ang) * rad * 0.6 };
-        if (inAreas(loc, cand, home)) {
-          res.wtx = cand.x;
-          res.wty = cand.y;
-          res.wMoving = true;
+      const here = worldToTile(res.wx, res.wy);
+      const baseTile = worldToTile(base.x, base.y);
+      const loc3 = this.model.locations[loc];
+      const near = loc3.walkTiles.filter((t) => Math.max(Math.abs(t.x - baseTile.x), Math.abs(t.y - baseTile.y)) <= 3 && (t.x !== here.x || t.y !== here.y) && this.model.grid.cost[this.tileKey(t)] <= 2);
+      for (let tries = 0; tries < 6 && near.length > 0; tries++) {
+        const cand = near[Math.floor(res.rng() * near.length)];
+        const tiles = this.finder.find(here, cand);
+        if (tiles && tiles.length > 1 && tiles.length <= 9) {
+          res.wander = { walk: tilesToWalk(tiles, { x: res.wx, y: res.wy }), d: 0 };
           break;
         }
       }
-      if (!res.wMoving) res.wUntil = nowMs + 3000;
+      if (!res.wander) res.wUntil = nowMs + 3000;
     }
-    return { x: res.wx, y: res.wy, travelling: false, dirX: 0 };
+    return { x: res.wx, y: res.wy, travelling: false, dirX: 0, dirY: 0 };
   }
 
-  /** the stand point of a resident at a location (collaborators pair up) */
-  private standBase(res: Resident, loc: LocationId): Pt {
+  /** the stand tile of a resident at a location (collaborators pair up side by side) */
+  private standTile(res: Resident, loc: LocationId): TilePoint {
     const a = res.data;
-    const base = this.slotPoint(res, loc);
+    const base = this.slotTile(res, loc);
     if (a.activity === "collaborating" && a.partnerId && loc !== "home") {
       const partner = this.residents.get(a.partnerId);
       if (partner && !partner.data.travel && partner.data.location === loc && partner.data.activity === "collaborating") {
-        // the lexicographically smaller id leads: it stands left of the lead's slot, the follower right of it
+        // the lexicographically smaller id leads and keeps its slot; the follower stands right next to it
         const lead = a.id < partner.id ? res : partner;
-        const leadBase = lead === res ? base : this.slotPoint(partner, loc);
-        return clampToAreas(loc, { x: leadBase.x + (lead === res ? -22 : 22), y: leadBase.y }, a.homeSlot);
+        if (lead === res) return base;
+        return this.neighbourTile(loc, this.slotTile(partner, loc));
       }
     }
     return base;
@@ -884,8 +1062,9 @@ export class TownScene extends Phaser.Scene implements TownApi {
       const dy = tgt.y - res.y;
       const d = Math.hypot(dx, dy);
       if (d > 0.01) {
-        const k = 1 - Math.exp(-dt * (d > 140 ? 3 : 7));
-        const step = Math.min(d, Math.max(d * k, (d > 140 ? 140 : 28) * dt));
+        const far = d > 80;
+        const k = 1 - Math.exp(-dt * (far ? 3 : 8));
+        const step = Math.min(d, Math.max(d * k, (far ? 90 : 18) * dt));
         res.x += (dx / d) * step;
         res.y += (dy / d) * step;
       }
@@ -897,64 +1076,59 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const sleeping = a.activity === "sleeping";
     const waiting = a.activity === "waiting";
     const onRoad = tgt.travelling && !sleeping;
-    res.walking = !sleeping && (onRoad || res.speedEma > 7);
+    res.walking = !sleeping && (onRoad || res.speedEma > 6);
 
-    // facing
-    const faceDx = Math.abs(vx) > 3 ? vx : tgt.dirX;
-    if (Math.abs(faceDx) > 0.5 && !sleeping && !waiting) res.facing = faceDx > 0 ? 1 : -1;
-    if (a.activity === "collaborating" && a.partnerId) {
-      const partner = this.residents.get(a.partnerId);
-      if (partner && !res.walking) res.facing = partner.x >= res.x ? 1 : -1;
+    // facing follows the direction of movement
+    if (!sleeping && !waiting) {
+      if (speed > 4) res.dir = dirFromVec(vx, vy, res.dir);
+      else res.dir = dirFromVec(tgt.dirX, tgt.dirY, res.dir);
     }
-    if (waiting) res.facing = 1;
-    res.sprite.setFlipX(res.facing < 0);
+    if (a.activity === "collaborating" && a.partnerId && !res.walking) {
+      const partner = this.residents.get(a.partnerId);
+      if (partner) res.dir = dirFromVec(partner.x - res.x, (partner.y - res.y) * 0.2, res.dir);
+    }
+    if (waiting || sleeping) res.dir = "down";
 
-    // animation
-    const baseScale = SPRITE_SCALE;
+    // animation: walk cycle while moving, standing frame otherwise
     if (res.walking) {
-      const cadence = clamp(res.speedEma / 24, 0.75, 1.5) * 10.5;
-      res.phase += dt * cadence;
-      const bob = Math.abs(Math.sin(res.phase)) * 3.2;
-      const sq = Math.sin(res.phase * 2) * 0.035;
-      res.sprite.y = -bob;
-      res.sprite.setScale(baseScale * (1 - sq), baseScale * (1 + sq));
-    } else if (sleeping) {
+      res.sprite.anims.play(animKey(res.texture, "walk", res.dir), true);
+      res.sprite.anims.timeScale = clamp(0.75 + res.speedEma / 40, 0.75, 1.4);
+    } else {
+      if (res.sprite.anims.isPlaying) res.sprite.anims.stop();
+      res.sprite.setFrame(frameIndex(res.dir));
+    }
+    res.sprite.x = 0;
+    if (sleeping) {
       res.breathe += dt * 1.1;
       res.sprite.y = 0;
-      res.sprite.setScale(baseScale * 1.0, baseScale * (0.96 + Math.sin(res.breathe) * 0.012));
-    } else {
-      res.breathe += dt * 2.2;
-      const hop = waiting ? Math.max(0, Math.sin(timeSec * 2.4)) ** 6 * 2.2 : 0;
-      res.sprite.y = -hop;
-      res.sprite.setScale(baseScale * (1 - Math.sin(res.breathe) * 0.008), baseScale * (1 + Math.sin(res.breathe) * 0.016));
-    }
-    if (sleeping) {
       res.sprite.setTint(0x8f9fd6);
       res.sprite.setAlpha(0.78);
       res.shadow.setAlpha(0.6);
     } else {
+      const hop = waiting ? Math.max(0, Math.sin(timeSec * 2.4)) ** 6 * 1.6 : 0;
+      res.sprite.y = -Math.round(hop);
       res.sprite.clearTint();
       res.sprite.setAlpha(1);
       res.shadow.setAlpha(0.9);
     }
 
-    // placement + depth
-    res.root.setPosition(res.x, res.y);
-    res.root.setDepth(10 + res.y);
+    // placement + depth: y-sorted between the ground layers and the `above` layer
+    res.root.setPosition(Math.round(res.x), Math.round(res.y));
+    res.root.setDepth(DEPTH.residents + res.y);
     if (res.ring) {
       const pulse = 0.5 + 0.5 * Math.sin(timeSec * 3.2);
-      res.ring.setScale(0.78 + pulse * 0.07);
+      res.ring.setScale(0.3 + pulse * 0.03);
       res.ring.setAlpha(0.65 + pulse * 0.35);
     }
     const selected = this.selectedId === res.id;
     res.sel.setVisible(selected);
     if (selected) res.sel.setAlpha(0.7 + 0.3 * Math.sin(timeSec * 5));
 
-    // label / emote / bubble live in the top layer, scale against zoom so text stays readable
+    // label / emote / bubble live in the top layer; scaled against zoom so text keeps its screen size
     const zoom = this.cameras.main.zoom;
-    const s = clamp(1 / zoom, 0.62, 1.12);
+    const s = clamp(1 / zoom, 0.18, 1.2);
     res.top.setScale(s);
-    res.top.setPosition(res.x, res.y - CHAR_PX - 3 - res.liftCur);
+    res.top.setPosition(Math.round(res.x), Math.round(res.y - CHAR_H - 2 / zoom - res.liftCur));
     res.top.setDepth(100 + res.y);
     this.updateEmote(res);
     if (res.emoteKey) {
@@ -985,7 +1159,9 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const nowMs = performance.now();
     const simNow = this.estSimNow();
     for (const res of this.residents.values()) this.updateResident(res, simNow, dt, nowMs, time / 1000);
+    this.updateDog(dt, nowMs);
     this.separateLabels(dt);
+    this.updatePlaceLabels();
     this.updateGrade(dt);
     this.updateCamera(dt);
   }
@@ -994,7 +1170,8 @@ export class TownScene extends Phaser.Scene implements TownApi {
   private separateLabels(dt: number): void {
     const list = Array.from(this.residents.values()).sort((a, b) => a.y - b.y || a.x - b.x);
     const done: Resident[] = [];
-    const s = clamp(1 / this.cameras.main.zoom, 0.62, 1.12);
+    const zoom = this.cameras.main.zoom;
+    const s = clamp(1 / zoom, 0.18, 1.2);
     const reachX = 52 * s;
     const step = 19 * s;
     for (const r of list) {
@@ -1016,7 +1193,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const k = 1 - Math.exp(-dt * 10);
     for (const r of list) {
       r.liftCur = lerp(r.liftCur, r.lift, k);
-      r.top.setY(r.y - CHAR_PX - 3 - r.liftCur);
+      r.top.setY(Math.round(r.y - CHAR_H - 2 / zoom - r.liftCur));
     }
   }
 
@@ -1038,7 +1215,6 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const key = `${g.bright.toFixed(3)}|${g.night.toFixed(3)}|${g.warm.toFixed(3)}`;
     if (key === this.lastGradeKey) return;
     this.lastGradeKey = key;
-    // brightening: a screen-blended light layer lifts the night-lit artwork towards "day"
     this.dayLight.setFillStyle(0xfff3d6, clamp((g.bright - 1) * 0.6, 0, 0.5));
     this.warmOverlay.setFillStyle(g.warmColor, g.warm);
     this.nightOverlay.setFillStyle(0x0a1448, g.night);
@@ -1046,16 +1222,21 @@ export class TownScene extends Phaser.Scene implements TownApi {
 
   // ───────────── camera ─────────────
 
+  private defaultZoom(): number {
+    return this.scale.width < 700 ? DEFAULT_ZOOM_PHONE : DEFAULT_ZOOM;
+  }
+
   private onResize(): void {
     const cam = this.cameras.main;
     const w = this.scale.width;
     const h = this.scale.height;
     if (w <= 0 || h <= 0) return;
     this.safe = w < 700 ? { l: 0, r: 64, t: 130, b: 170 } : { l: 380, r: 84, t: 64, b: 104 };
-    const cover = Math.max(w / MAP_W, h / MAP_H);
-    const wasCover = !this.userZoomed || Math.abs(cam.zoom - this.minZoom) < 0.001;
+    // the map must always cover the viewport: that is the smallest zoom
+    const cover = Math.max(w / this.mapW, h / this.mapH);
+    const wasDefault = !this.userZoomed;
     this.minZoom = cover;
-    if (wasCover) cam.setZoom(cover);
+    if (wasDefault) cam.setZoom(clamp(this.defaultZoom(), cover, MAX_ZOOM));
     else cam.setZoom(clamp(cam.zoom, cover, MAX_ZOOM));
   }
 
@@ -1104,7 +1285,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const cam = this.cameras.main;
     const z = cam.zoom || 1;
     const { l, r, t, b } = this.safe;
-    cam.setBounds(-l / z, -t / z, MAP_W + (l + r) / z, MAP_H + (t + b) / z);
+    cam.setBounds(-l / z, -t / z, this.mapW + (l + r) / z, this.mapH + (t + b) / z);
   }
 
   /** world point that puts (x, y) in the middle of the HUD-free area */
@@ -1128,7 +1309,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
         const e = 1 - Math.pow(1 - k, 3);
         const z = lerp(an.fromZ, an.zoomTo, e);
         cam.setZoom(z);
-        const goal = this.safeCenterFor(res.x, res.y - 18);
+        const goal = this.safeCenterFor(res.x, res.y - 8);
         this.setCenter(lerp(an.fromX, goal.x, e), lerp(an.fromY, goal.y, e));
         if (k >= 1) this.camAnim = null;
       }
@@ -1149,7 +1330,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
       if (res) {
         const c = this.centerOf();
         const k = 1 - Math.exp(-dt * 4.5);
-        const goal = this.safeCenterFor(res.x, res.y - 18);
+        const goal = this.safeCenterFor(res.x, res.y - 8);
         this.setCenter(lerp(c.x, goal.x, k), lerp(c.y, goal.y, k));
       }
     }
@@ -1159,7 +1340,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     if (!this.ready) return null;
     const me = Array.from(this.residents.values()).find((r) => r.data.isPlayer);
     if (!me) return null;
-    const s = this.worldToScreen(me.x, me.y - CHAR_PX * 0.5);
+    const s = this.worldToScreen(me.x, me.y - CHAR_H * 0.5);
     if (s.x < 0 || s.y < 0 || s.x > this.scale.width || s.y > this.scale.height) return null;
     return s;
   }
@@ -1175,6 +1356,10 @@ export class TownScene extends Phaser.Scene implements TownApi {
       this.pinch = { dist: Math.hypot(p1.x - p2.x, p1.y - p2.y) };
       this.dragged = true;
     }
+  }
+
+  private setHover(it: Interactable | null): void {
+    this.hovered = it;
   }
 
   private onPointerMove(p: Phaser.Input.Pointer): void {
@@ -1196,17 +1381,21 @@ export class TownScene extends Phaser.Scene implements TownApi {
       return;
     }
     if (!p.isDown) {
-      // hover cursor over residents
+      // hover: residents first, then buildings / landmarks
       const hit = this.hitResident(p.x, p.y);
-      this.input.setDefaultCursor(hit ? "pointer" : "grab");
+      const w = this.screenToWorld(p.x, p.y);
+      const it = hit ? null : interactableAt(this.model, w.x, w.y);
+      this.setHover(it);
+      this.input.setDefaultCursor(hit || it ? "pointer" : "grab");
       return;
     }
     if (!this.downAt) return;
     if (!this.dragged && Math.hypot(p.x - this.downAt.x, p.y - this.downAt.y) > 6) {
       this.dragged = true;
+      this.setHover(null);
       if (this.followId) {
         this.followId = null;
-        this.opts.onFollowChange?.(null);
+        EventBus.emit("follow-changed", null);
       }
       this.camAnim = null;
       this.input.setDefaultCursor("grabbing");
@@ -1230,27 +1419,39 @@ export class TownScene extends Phaser.Scene implements TownApi {
     if (wasDrag || !this.downAt) return;
     this.downAt = null;
     const hit = this.hitResident(p.x, p.y);
-    this.opts.onSelect?.(hit ? hit.id : null);
+    if (hit) {
+      EventBus.emit("location-selected", null);
+      EventBus.emit("resident-selected", hit.id);
+      return;
+    }
+    const w = this.screenToWorld(p.x, p.y);
+    const it = interactableAt(this.model, w.x, w.y);
+    EventBus.emit("resident-selected", null);
+    EventBus.emit("location-selected", it ? it.location : null);
   }
 
   private onWheel(pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number): void {
     const cam = this.cameras.main;
     const base = this.zoomAnim ? this.zoomAnim.target : cam.zoom;
-    const target = clamp(base * Math.exp(-dy * 0.0013), this.minZoom, MAX_ZOOM);
+    // one notch = one zoom step (1, 1.5, 2, 2.5, 3, 4), so the pixel art keeps a tidy scale
+    const steps = Array.from(new Set([this.minZoom, ...ZOOM_STEPS.filter((z) => z > this.minZoom + 0.01 && z <= MAX_ZOOM)])).sort((a, b) => a - b);
+    let idx = 0;
+    for (let i = 0; i < steps.length; i++) if (Math.abs(steps[i] - base) < Math.abs(steps[idx] - base)) idx = i;
+    const next = clamp(idx + (dy < 0 ? 1 : -1), 0, steps.length - 1);
     this.camAnim = null;
     this.userZoomed = true;
-    this.zoomAnim = { target, sx: pointer.x, sy: pointer.y };
+    this.zoomAnim = { target: steps[next], sx: pointer.x, sy: pointer.y };
   }
 
   private hitResident(sx: number, sy: number): Resident | null {
     const w = this.screenToWorld(sx, sy);
     const zoom = this.cameras.main.zoom;
-    const padX = Math.max(26, 18 / zoom + 10);
+    const padX = Math.max(9, 20 / zoom);
     let best: Resident | null = null;
     for (const r of this.residents.values()) {
       const dx = Math.abs(w.x - r.x);
       const dyUp = r.y - w.y; // positive when the pointer is above the feet
-      if (dx <= padX && dyUp >= -12 && dyUp <= CHAR_PX + 22) {
+      if (dx <= padX && dyUp >= -4 && dyUp <= CHAR_H + 6) {
         if (!best || r.y > best.y) best = r;
       }
     }
@@ -1260,27 +1461,36 @@ export class TownScene extends Phaser.Scene implements TownApi {
   // ───────────── debug overlay ─────────────
 
   private drawDebug(): void {
-    const g = this.add.graphics().setDepth(9000);
-    g.lineStyle(3, 0xff4040, 0.9);
-    for (const [a, b] of EDGES) {
-      g.lineBetween(NODES[a].x, NODES[a].y, NODES[b].x, NODES[b].y);
-    }
-    g.fillStyle(0xffff00, 1);
-    for (const n of Object.values(NODES)) g.fillCircle(n.x, n.y, 4);
-    for (const id of Object.keys(LOCATIONS) as LocationId[]) {
-      g.lineStyle(2, 0x00ffff, 0.9);
-      g.fillStyle(0x00ffff, 0.12);
-      for (const r of areasOf(id)) {
-        g.fillRect(r.x, r.y, r.w, r.h);
-        g.strokeRect(r.x, r.y, r.w, r.h);
+    const g = this.add.graphics().setDepth(DEPTH.hover - 1);
+    const m = this.model;
+    // blocked tiles
+    g.fillStyle(0xff3030, 0.28);
+    for (let y = 0; y < m.height; y++) for (let x = 0; x < m.width; x++) if (m.grid.blocked[y * m.width + x]) g.fillRect(x * 16, y * 16, 16, 16);
+    // costly (non-road) walkable tiles are left alone; stand areas, slots, doors
+    for (const loc of Object.values(m.locations)) {
+      g.lineStyle(1, 0x00ffff, 0.9);
+      g.fillStyle(0x00ffff, 0.1);
+      for (const r of loc.areas) {
+        g.fillRect(r.x * 16, r.y * 16, r.w * 16, r.h * 16);
+        g.strokeRect(r.x * 16, r.y * 16, r.w * 16, r.h * 16);
       }
       g.fillStyle(0x30ff30, 1);
-      for (const s of slotsOf(id)) g.fillCircle(s.x, s.y, 3);
-      const an = anchorOf(id);
-      this.add
-        .text(an.x + 6, an.y - 16, id, { fontFamily: FONT, fontSize: "12px", color: "#ffffff", stroke: "#000", strokeThickness: 3 })
-        .setDepth(9001);
+      for (const s of loc.slots) g.fillCircle(s.x * 16 + 8, s.y * 16 + 8, 2);
+      if (loc.door) {
+        g.fillStyle(0xffff00, 1);
+        g.fillCircle(loc.door.x * 16 + 8, loc.door.y * 16 + 8, 3);
+      }
     }
-    this.debugGfx = g;
+    g.fillStyle(0xff80ff, 1);
+    for (const h of m.homeDoors) g.fillCircle(h.tile.x * 16 + 8, h.tile.y * 16 + 8, 3);
+    g.lineStyle(1, 0x60ff60, 0.9);
+    for (const it of m.interactables) g.strokeRect(it.rect.x, it.rect.y, it.rect.w, it.rect.h);
+  }
+
+  /** dev helper: the path (world px) the finder would walk between two locations */
+  debugPath(from: LocationId, to: LocationId, homeSlot = 0): Pt[] {
+    const a = this.entryTile(from, homeSlot);
+    const b = this.entryTile(to, homeSlot);
+    return (this.finder.find(a, b) ?? []).map(tileToWorld);
   }
 }

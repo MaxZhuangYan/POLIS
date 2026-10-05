@@ -9,11 +9,13 @@
 // challenges, leaves ≤50-char notes and reads the nightly postcard.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentView, FeedItem, GameSnapshot } from "@/lib/types";
+import type { AgentView, FeedItem, GameSnapshot, LocationId } from "@/lib/types";
 import type { BusyKey, GameActions } from "./actions";
 import PhaserTown, { type PhaserTownHandle } from "./town/PhaserTown";
+import { readLocationMeta, type LocationMeta, type TiledMap } from "./town/tiled";
+import { TOWN_MAP_URL } from "./game/keys";
 import { AgentCard, ActionBar, ClockPill, OffsetNote, StatusPills } from "./hud/TopHud";
-import { Drawer, FeedPanel, Inspector, Rail, type DrawerTab } from "./hud/SidePanels";
+import { Drawer, FeedPanel, Inspector, LocationCard, Rail, type DrawerTab } from "./hud/SidePanels";
 import { Banner, CoachMarks, Dock, FeedbackPrompt, LoadingScreen, LocateButton, TestPanel, Toasts, type CoachStep, type ToastItem } from "./hud/Overlays";
 import { ForkModal, ImprintModal, JudgmentModal, NoteModal, OnboardingModal, PostcardModal, WaveringModal } from "./hud/Modals";
 import { dayNumber, fmtClock } from "./hud/time";
@@ -114,6 +116,8 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   // ── town interaction ───────────────────────────────────────────────────
   const townRef = useRef<PhaserTownHandle>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedLoc, setSelectedLoc] = useState<LocationId | null>(null);
+  const [locMeta, setLocMeta] = useState<Partial<Record<LocationId, LocationMeta>>>({});
   const [followId, setFollowId] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<DrawerTab | null>(null);
   const [feedOpen, setFeedOpen] = useState(true);
@@ -123,8 +127,37 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
 
   const handleSelect = useCallback((id: string | null) => {
     setSelectedId(id);
-    if (id) setDrawer(null);
+    if (id) {
+      setDrawer(null);
+      setSelectedLoc(null);
+    }
   }, []);
+  // a building / landmark was clicked in the town: open its card (names + owners come from the Tiled map itself)
+  const handleSelectLocation = useCallback((id: LocationId | null) => {
+    setSelectedLoc(id);
+    if (id) {
+      setSelectedId(null);
+      setDrawer(null);
+    }
+  }, []);
+  useEffect(() => {
+    let off = false;
+    fetch(TOWN_MAP_URL)
+      .then((r) => r.json() as Promise<TiledMap>)
+      .then((m) => {
+        if (!off) setLocMeta(readLocationMeta(m));
+      })
+      .catch(() => {
+        /* the card falls back to the location id */
+      });
+    return () => {
+      off = true;
+    };
+  }, []);
+  // opening a drawer closes the building card (the card never hides behind a drawer and pops back later)
+  useEffect(() => {
+    if (drawer) setSelectedLoc(null);
+  }, [drawer]);
   const getPlayerScreen = useCallback(() => townRef.current?.getPlayerScreen() ?? null, []);
   const handleFollowChange = useCallback((id: string | null) => setFollowId(id), []);
 
@@ -143,6 +176,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     if (!id) return;
     setFollowId(null);
     setSelectedId(id);
+    setSelectedLoc(null);
     setDrawer(null);
     townRef.current?.focusAgent(id);
   }, []);
@@ -272,7 +306,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     [nextPostcardLabel]
   );
   // coach marks wait (queue) while anything else is on screen: modals, drawers, the inspector, the feedback panel
-  const overlayOpen = modal !== "none" || drawer !== null || selectedId !== null || showFeedback;
+  const overlayOpen = modal !== "none" || drawer !== null || selectedId !== null || selectedLoc !== null || showFeedback;
   const coachReady = !!player && player.onboarding === "done" && !overlayOpen && seen !== null;
   const coachPending = seen ? coachSteps.filter((s) => !seen.has(s.key)) : [];
   const coachStep = coachReady && coachPending.length > 0 ? coachPending[0] : null;
@@ -310,10 +344,11 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         if (closable) closeModal();
       } else if (drawer) setDrawer(null);
       else if (selectedId) setSelectedId(null);
+      else if (selectedLoc) setSelectedLoc(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [coachStep, coachSkip, modal, closable, closeModal, drawer, selectedId]);
+  }, [coachStep, coachSkip, modal, closable, closeModal, drawer, selectedId, selectedLoc]);
 
   // ── derived view data ──────────────────────────────────────────────────
   const selectedAgent = selectedId ? (agentById.get(selectedId) ?? null) : null;
@@ -325,6 +360,20 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
       .sort((a, b) => b.atMs - a.atMs || b.id - a.id)
       .slice(0, 3);
   }, [selectedId, snapshot]);
+
+  // building card: owner NPC, who is standing there now, and the latest feed lines that mention the place
+  const locCard = useMemo(() => {
+    if (!selectedLoc || !snapshot) return null;
+    const meta = locMeta[selectedLoc];
+    const label = meta?.label ?? selectedLoc;
+    const owner = meta?.owner ? (agentById.get(meta.owner) ?? null) : null;
+    const here = agents.filter((a) => a.location === selectedLoc && !a.travel);
+    const lines = snapshot.feed
+      .filter((f) => f.text.includes(label))
+      .sort((a, b) => b.atMs - a.atMs || b.id - a.id)
+      .slice(0, 3);
+    return { id: selectedLoc, label, owner, here, lines };
+  }, [selectedLoc, snapshot, locMeta, agentById, agents]);
 
   const pendingCount = player ? player.pendingMoments.length + (player.pendingJudgment ? 1 : 0) + (player.pendingWavering ? 1 : 0) : 0;
   const minutesToTick = world ? Math.max(0, Math.ceil((world.nextTickAtMs - simNow) / 60000)) : null;
@@ -363,6 +412,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         selectedId={selectedId}
         followId={followId}
         onSelect={handleSelect}
+        onSelectLocation={handleSelectLocation}
         onFollowChange={handleFollowChange}
         debug={debugTown}
       />
@@ -418,6 +468,23 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
                 setSelectedId(null);
                 setDrawer("principles");
               }}
+            />
+          ) : null}
+
+          {locCard && !drawer && !selectedAgent ? (
+            <LocationCard
+              id={locCard.id}
+              label={locCard.label}
+              owner={locCard.owner}
+              here={locCard.here}
+              lines={locCard.lines}
+              onPick={(id) => {
+                setSelectedLoc(null);
+                setFollowId(null);
+                setSelectedId(id);
+                townRef.current?.focusAgent(id);
+              }}
+              onClose={() => setSelectedLoc(null)}
             />
           ) : null}
 

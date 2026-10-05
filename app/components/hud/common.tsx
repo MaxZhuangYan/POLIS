@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import type { Domain, PrincipleView } from "@/lib/types";
+import { SPRITE_KEYS, facePath, normalizeSprite } from "../town/characters";
 import styles from "./hud.module.css";
 
 // ───────────────────────────── icons & portraits ─────────────────────────────
@@ -20,10 +21,11 @@ export function Icon({ name, size = 20, className }: { name: string; size?: numb
   );
 }
 
-export const KNOWN_SPRITES = ["architect", "broker", "maker", "archivist", "mediator", "scout", "rookie", "courier", "guide"];
+export const KNOWN_SPRITES: string[] = SPRITE_KEYS;
 
+/** 38x38 faceset portrait of a logical sprite — the same character the town draws (town/characters.ts) */
 export function Portrait({ sprite, size = 48, player = false, className }: { sprite: string; size?: number; player?: boolean; className?: string }) {
-  const key = KNOWN_SPRITES.includes(sprite) ? sprite : "rookie";
+  const key = normalizeSprite(sprite);
   return (
     <span
       className={`${styles.portrait} ${player ? styles.portraitPlayer : ""} ${className ?? ""}`}
@@ -31,7 +33,7 @@ export function Portrait({ sprite, size = 48, player = false, className }: { spr
       aria-hidden
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={`/assets/polis-sprites/${key}.png`} alt="" draggable={false} />
+      <img src={facePath(key)} alt="" draggable={false} />
     </span>
   );
 }
