@@ -48,6 +48,7 @@ import {
 } from "./decisionMoments";
 import { maybeRunDistillationBatch } from "./distillation";
 import { maybeDilemma } from "./dilemmas";
+import { gossipAbout } from "./gossip";
 import { checkTitle } from "./progression";
 import { llmAvailable } from "./llm";
 import { activeDirective } from "./notes";
@@ -675,7 +676,10 @@ function maybeDefault(agentId: string, coop: TaskRow): void {
   const meta = taskMeta(coop);
   if (meta.noDefault || coop.progress >= coop.duration - 1) return;
   if (Math.random() > 0.12) return; // whether a tempting offer shows up at all is the world's chance
-  const offer = openTasks().filter((t) => t.mode === "skilled" && t.reward >= 25).sort((x, y) => y.reward - x.reward)[0];
+  const rep = getAgent(agentId).reputation;
+  const offer = openTasks()
+    .filter((t) => t.mode === "skilled" && t.reward >= 25 && (TEMPLATE_BY_ID[t.template_id ?? ""]?.minRep ?? 0) <= rep)
+    .sort((x, y) => y.reward - x.reward)[0];
   if (!offer) return;
   const t = traitsOf(agentId);
   const share = Math.max(1, Math.floor(coop.reward / 2));
@@ -708,6 +712,9 @@ function eveningEncounters(): void {
     const latest = db
       .prepare("SELECT text FROM memories WHERE agent_id = ? AND at_ms > ? ORDER BY at_ms DESC LIMIT 1")
       .get(p.id, simNow() - 14 * HOUR_MS) as { text: string } | undefined;
+    // 传闻: residents talk about the guardian's Agent when it is not in the group
+    const pid = playerId();
+    if (pid && !group.some((x) => x.id === pid) && Math.random() < 0.5 && gossipAbout(pid, p.id, q.id)) continue;
     if (grudge) {
       say(p.id, `……${q.name}。`, "upset");
       adjustRelationship(p.id, q.id, -1, null);

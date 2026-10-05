@@ -150,7 +150,9 @@ function composeTemplate(f: Facts, noteLines: string[]): string[] {
     const n = counts.get(m.text) ?? 1;
     lines.push(`${connectors[i] ?? ""}${m.text}${n > 1 ? `（今天这样的事有 ${n} 回）` : ""}`);
   });
-  if (f.principlesCited.length === 0 && f.anchorPrinciple) {
+  // ≥1 imprint must be quoted in what is actually written (a cited memory may not have made the top four lines)
+  const quotesOne = lines.some((l) => f.principlesCited.some((p) => l.includes(`『${p}』`)));
+  if (!quotesOne && f.anchorPrinciple) {
     const a = f.anchorPrinciple;
     const variants = [
       `${a.daysAgo} 天前你说过『${a.text}』。今天没用上，但我记着。`,
