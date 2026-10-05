@@ -1,0 +1,407 @@
+/* The guardian's long game: imprint slots, title & epithets, notice board, ledger, survey, the 默契 guess card,
+   settings / credits / new save. Same parchment + ink + pixel font as the other panels (tokens: GameShell.module.css). */
+
+.empty {
+  margin: 16px 8px;
+  color: var(--ink-2);
+  text-align: center;
+}
+.hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
+.lead {
+  margin: 4px 0 10px;
+  font-size: 24px;
+  line-height: 32px;
+}
+.btnRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.pos {
+  color: var(--ok);
+}
+.neg {
+  color: var(--danger);
+}
+
+/* ── title & epithets (Agent card) ── */
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
+.nextTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.repTrack {
+  display: inline-block;
+  width: 40px;
+  height: 6px;
+  background: var(--paper-3);
+  border: 1px solid var(--ink-3);
+}
+.repTrack i {
+  display: block;
+  height: 100%;
+  background: var(--gold-dk);
+}
+.epithets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.epithet {
+  padding: 0 6px;
+  min-height: 22px;
+  border: 2px solid var(--ink-3);
+  background: var(--paper-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.epithetOn {
+  border-color: var(--gold-dk);
+  background: var(--gold-hi);
+}
+.epithetWhy {
+  flex-basis: 100%;
+  color: var(--ink-2);
+}
+
+/* ── imprints panel (drawer) ── */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.slotHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.slotLabel {
+  color: var(--ink-2);
+}
+.slots {
+  display: inline-flex;
+  gap: 3px;
+}
+.slots i {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--ink-3);
+  background: transparent;
+}
+.slots i.slotOn {
+  background: var(--gold);
+  border-color: var(--gold-dk);
+}
+.attune {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 2px solid var(--trust);
+  color: var(--trust);
+}
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 2px dashed var(--danger);
+  font-size: 12px;
+  line-height: 18px;
+}
+.tablets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dormantSec h3,
+.notices h3,
+.ledgerGroup h3,
+.credits h3 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-3);
+  letter-spacing: 1px;
+}
+.dormantItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+}
+.picker > span {
+  flex-basis: 100%;
+}
+.surveyPast {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+/* ── board ── */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 20px;
+}
+.table th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--ink-3);
+  border-bottom: 2px solid var(--ink-3);
+  padding: 2px 4px;
+}
+.table td {
+  padding: 3px 4px;
+  border-bottom: 1px dashed var(--paper-3);
+}
+.table th:nth-child(n + 4),
+.table td:nth-child(n + 4) {
+  text-align: right;
+}
+.me td {
+  background: var(--gold-hi);
+  font-weight: 700;
+}
+.notices ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 18px;
+}
+.notices li {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+.notices time {
+  color: var(--ink-3);
+  flex: none;
+}
+
+/* ── ledger ── */
+.dayTabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.dayTab {
+  flex: none;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 2px solid var(--ink-3);
+  background: var(--paper-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dayTabOn {
+  background: var(--gold);
+  border-color: var(--gold-dk);
+}
+.ledgerTop {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 6px 0;
+}
+.ledgerTop > div {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  border: 2px solid var(--paper-3);
+  background: rgba(255, 255, 255, 0.35);
+  font-size: 12px;
+}
+.ledgerTop span {
+  color: var(--ink-3);
+}
+.ledgerTop b {
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 400;
+}
+.ledgerGroup ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 20px;
+}
+.ledgerGroup li {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px dashed var(--paper-3);
+}
+.ledgerGroup b {
+  font-weight: 400;
+}
+.ledgerNote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* ── floating cards (survey, guess) ── */
+.card {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--dock-h, 96px) + 12px);
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(520px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 10px solid transparent;
+  border-image: var(--frame-paper) 5 fill / 10px stretch;
+  padding: 4px 6px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 18px;
+  filter: drop-shadow(0 4px 0 rgba(43, 24, 13, 0.45));
+  pointer-events: auto;
+}
+.cardTitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+.words {
+  display: flex;
+  gap: 6px;
+}
+.word {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 8px solid transparent;
+  border-image: var(--frame-input) 4 fill / 8px stretch;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.guess {
+  bottom: calc(var(--dock-h, 96px) + 12px);
+}
+.guessHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.guessHead p {
+  flex: 1;
+}
+.collapse {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--ink-3);
+  background: var(--paper-2);
+  color: var(--ink);
+  cursor: pointer;
+}
+.guessed {
+  margin: 0;
+  font-size: 12px;
+}
+.guessPill {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--dock-h, 96px) + 12px);
+  transform: translateX(-50%);
+  z-index: 40;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 8px solid transparent;
+  border-image: var(--btn-tile-on, var(--btn-tile)) 4 fill / 8px stretch;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* ── settings / credits ── */
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.setRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.setRow input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+.setRow input[type="range"] {
+  flex: 1;
+}
+.setRow small {
+  color: var(--ink-3);
+}
+.setDanger {
+  padding-top: 8px;
+  border-top: 2px dashed var(--paper-3);
+}
+.credits p {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+@media (max-width: 900px) {
+  .ledgerTop {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .table th:nth-child(3),
+  .table td:nth-child(3) {
+    display: none;
+  }
+  .card,
+  .guessPill {
+    bottom: calc(var(--dock-h, 88px) + 8px);
+  }
+}
+
+.setRow input[type="range"],
+.setRow input[type="checkbox"] {
+  accent-color: var(--gold-dk);
+}

@@ -161,7 +161,17 @@ export function ForkModal({
   return (
     <ModalFrame
       title={step ? `第 ${step.index}/${step.total} 件事` : `岔路 · ${MOMENT_THEME[moment.type]}`}
-      eyebrow={step ? "它第一次入城。拿不定主意时，它会低声问你。" : <DomainTag domain={moment.type} />}
+      eyebrow={
+        step ? (
+          "它第一次入城。拿不定主意时，它会低声问你。"
+        ) : moment.templateId.startsWith("DLM_") && speaker ? (
+          <>
+            <DomainTag domain={moment.type} /> <span className={m.dilemmaTag}>{speaker.name} 的难处</span>
+          </>
+        ) : (
+          <DomainTag domain={moment.type} />
+        )
+      }
       onClose={onLater}
       wide
     >
@@ -599,7 +609,8 @@ export function PostcardModal({
   error,
   initialId,
   onRead,
-  onClose
+  onClose,
+  onLedger
 }: {
   items: PostcardView[];
   busy: boolean;
@@ -607,6 +618,8 @@ export function PostcardModal({
   initialId: number | null;
   onRead: (id: number) => void;
   onClose: () => void;
+  /** a way to the numbers — which never appear on the card itself */
+  onLedger?: () => void;
 }) {
   const list = useMemo(() => [...items].sort((a, b) => b.dayIndex - a.dayIndex || b.id - a.id), [items]);
   const [sel, setSel] = useState<number | null>(initialId ?? list.find((p) => !p.read)?.id ?? list[0]?.id ?? null);
@@ -620,7 +633,22 @@ export function PostcardModal({
   }, [card, onRead]);
   const volume = card ? Math.max(1, Math.round((card.dayIndex + 1) / 7)) : 1;
   return (
-    <ModalFrame title="明信片" eyebrow="它在夜里写给你的" onClose={onClose} wide tone="paper">
+    <ModalFrame
+      title="明信片"
+      eyebrow={
+        <>
+          它在夜里写给你的
+          {onLedger ? (
+            <button type="button" className={m.ledgerLink} onClick={onLedger}>
+              看账本（L）
+            </button>
+          ) : null}
+        </>
+      }
+      onClose={onClose}
+      wide
+      tone="paper"
+    >
       {list.length === 0 || !card ? (
         <p className={m.emptyNote}>还没有明信片。今晚它会写第一张。</p>
       ) : (

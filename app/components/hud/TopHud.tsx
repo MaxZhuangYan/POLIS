@@ -1,6 +1,7 @@
 "use client";
 
-import type { AgentView, WorldView } from "@/lib/types";
+import type { AgentView, ProgressionView, WorldView } from "@/lib/types";
+import { TitleProgress } from "./Progress";
 import { Icon, Portrait, SunMoon } from "./common";
 import { fmtSpan } from "./time";
 import styles from "./hud.module.css";
@@ -10,11 +11,16 @@ import styles from "./hud.module.css";
 export function AgentCard({
   agent,
   trust,
-  onOpenPrinciples
+  onOpenPrinciples,
+  progression,
+  compact = false
 }: {
   agent: AgentView;
   trust: number;
   onOpenPrinciples: () => void;
+  /** title progress + fact-backed epithets (the guardian's Agent only) */
+  progression?: ProgressionView;
+  compact?: boolean;
 }) {
   return (
     <section className={`${styles.panel} ${styles.agentCard}`} aria-label="我的 Agent" data-coach="agent-card">
@@ -26,6 +32,7 @@ export function AgentCard({
           <strong className={styles.agentName}>★ {agent.name}</strong>
         </div>
         <span className={styles.youTag}>你守护的 Agent{agent.role && agent.role !== "你守护的 Agent" ? ` · ${agent.role}` : ""}</span>
+        {progression ? <TitleProgress progression={progression} compact={compact} /> : null}
       </div>
       <ul className={styles.chips}>
         <li className={styles.chip} title="Scrip（城邦通用的小额货币）">

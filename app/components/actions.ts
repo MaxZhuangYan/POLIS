@@ -13,6 +13,16 @@ export interface GameActions {
   readPostcard(id: number): Promise<void>;
   ackOnboarding(): Promise<void>;
   advance(opts: { hours?: number; to?: "night" | "morning" }): Promise<void>; // test fast-forward only
+  /** wake a dormant imprint; with every slot taken, sleepId names the one that goes to sleep instead */
+  wakeImprint(id: number, sleepId: number | null): Promise<void>;
+  /** one more memory slot (Scrip, burned) */
+  buySlot(): Promise<void>;
+  /** the three words after a weekly volume */
+  submitSurvey(volume: number, words: string[]): Promise<void>;
+  /** 默契: guess what the Agent will decide on its own */
+  guess(guessId: number, optionId: string): Promise<void>;
+  /** 新的存档: back up the save and start an empty world */
+  resetSave(): Promise<void>;
 }
 
-export type BusyKey = "create" | "choose" | "judgment" | "wavering" | "note" | "postcard" | "advance" | null;
+export type BusyKey = "create" | "choose" | "judgment" | "wavering" | "note" | "postcard" | "advance" | "imprint" | "survey" | "guess" | "reset" | null;

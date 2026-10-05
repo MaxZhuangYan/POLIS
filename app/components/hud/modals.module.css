@@ -755,3 +755,27 @@
     animation: none;
   }
 }
+
+/* a resident's personal dilemma (DLM_ moments) */
+.dilemmaTag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 2px solid var(--gold-dk);
+  background: var(--gold-hi);
+  color: var(--gold-ink);
+  font-size: 12px;
+  line-height: 18px;
+}
+/* postcard header: the way to the ledger (numbers stay off the card) */
+.ledgerLink {
+  margin-left: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}

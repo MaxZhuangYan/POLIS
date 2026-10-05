@@ -4,6 +4,7 @@ import { useMemo, type ReactNode } from "react";
 import type { AgentView, FeedItem, PlayerView, RelationshipView } from "@/lib/types";
 import { Btn, CloseGlyph, GLYPH_DOWN, GLYPH_RIGHT, Icon, PixelGlyph, PrincipleTablet, Portrait } from "./common";
 import type { TownSocial } from "./social";
+import { PrinciplesPanel } from "./Progress";
 import { fmtClock } from "./time";
 import styles from "./hud.module.css";
 
@@ -79,13 +80,21 @@ export function Rail({
   unread,
   postcardOpen,
   onDrawer,
-  onPostcards
+  onPostcards,
+  onBoard,
+  onLedger,
+  boardOpen = false,
+  ledgerOpen = false
 }: {
   active: DrawerTab | null;
   unread: number;
   postcardOpen: boolean;
   onDrawer: (t: DrawerTab) => void;
   onPostcards: () => void;
+  onBoard?: () => void;
+  onLedger?: () => void;
+  boardOpen?: boolean;
+  ledgerOpen?: boolean;
 }) {
   const btn = (key: string, icon: string, label: string, on: boolean, click: () => void, badge?: number) => (
     <button key={key} type="button" className={`${styles.railBtn} ${on ? styles.railBtnOn : ""}`} onClick={click} aria-pressed={on} title={label}>
@@ -100,6 +109,8 @@ export function Rail({
       {btn("relations", "relations", "关系", active === "relations", () => onDrawer("relations"))}
       {btn("memories", "diary", "记忆", active === "memories", () => onDrawer("memories"))}
       {btn("postcards", "ticket", "明信片", postcardOpen, onPostcards, unread)}
+      {onBoard ? btn("board", "reputation", "公告栏", boardOpen, onBoard) : null}
+      {onLedger ? btn("ledger", "scrip", "账本", ledgerOpen, onLedger) : null}
       {btn("help", "help", "帮助", active === "help", () => onDrawer("help"))}
     </nav>
   );
@@ -115,7 +126,8 @@ export function Drawer({
   onClose,
   player,
   agents,
-  simNowTz
+  simNowTz,
+  imprints
 }: {
   tab: DrawerTab;
   onTab: (t: DrawerTab) => void;
@@ -123,6 +135,8 @@ export function Drawer({
   player: PlayerView | null;
   agents: AgentView[];
   simNowTz: string;
+  /** the 烙印 tab's slot / wake controls */
+  imprints?: { busy: boolean; error: string | null; onWake: (id: number, sleepId: number | null) => void; onBuySlot: () => void };
 }) {
   return (
     <aside className={`${styles.panel} ${styles.drawer}`} aria-label={TAB_LABEL[tab]}>
@@ -139,7 +153,13 @@ export function Drawer({
         </button>
       </header>
       <div className={styles.drawerBody}>
-        {tab === "principles" ? <PrinciplesTab player={player} /> : null}
+        {tab === "principles" ? (
+          player && imprints ? (
+            <PrinciplesPanel player={player} busy={imprints.busy} error={imprints.error} onWake={imprints.onWake} onBuySlot={imprints.onBuySlot} />
+          ) : (
+            <PrinciplesTab player={player} />
+          )
+        ) : null}
         {tab === "relations" ? <RelationsTab player={player} agents={agents} tz={simNowTz} /> : null}
         {tab === "memories" ? <MemoriesTab player={player} /> : null}
         {tab === "help" ? <HelpTab /> : null}
@@ -394,7 +414,8 @@ export function LocationCard({
   here,
   lines,
   onPick,
-  onClose
+  onClose,
+  onBoard
 }: {
   id: string;
   label: string;
@@ -403,6 +424,8 @@ export function LocationCard({
   lines: FeedItem[];
   onPick: (agentId: string) => void;
   onClose: () => void;
+  /** the notice board's card opens the board */
+  onBoard?: () => void;
 }) {
   return (
     <aside className={`${styles.panel} ${styles.inspector}`} aria-label={`${label}`} data-location={id}>
@@ -418,6 +441,13 @@ export function LocationCard({
           <CloseGlyph />
         </button>
       </header>
+      {id === "board" && onBoard ? (
+        <div className={styles.insFeed}>
+          <Btn size="sm" variant="primary" onClick={onBoard}>
+            看公告栏（B）
+          </Btn>
+        </div>
+      ) : null}
       {owner ? (
         <button type="button" className={styles.locOwner} onClick={() => onPick(owner.id)} title="查看他的近况">
           <Portrait sprite={owner.sprite} size={48} />

@@ -105,6 +105,11 @@ export default function Page() {
       readPostcard: (id) => run("postcard", () => post(`/api/postcards/${id}/read`)),
       ackOnboarding: () => run("create", () => post("/api/player/onboarding")),
       advance: (opts) => run("advance", () => post("/api/test/advance", opts)),
+      wakeImprint: (id, sleepId) => run("imprint", () => post(`/api/principles/${id}/wake`, { sleepId })),
+      buySlot: () => run("imprint", () => post("/api/principles/slots")),
+      submitSurvey: (volume, words) => run("survey", () => post("/api/survey", { volume, words })),
+      guess: (guessId, optionId) => run("guess", () => post(`/api/guesses/${guessId}`, { optionId })),
+      resetSave: () => run("reset", () => post("/api/save/reset", { confirm: "重新开始" })),
     }),
     [run],
   );

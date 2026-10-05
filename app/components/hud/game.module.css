@@ -700,3 +700,27 @@
     transition: none;
   }
 }
+
+/* title menu: the secondary entries under 开始 / 继续 */
+.subMenu {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.subBtn {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 8px solid transparent;
+  border-image: var(--btn-tile) 4 fill / 8px stretch;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.subBtn:hover:not(:disabled),
+.subBtn:focus-visible {
+  border-image-source: var(--btn-tile-on);
+  outline: none;
+}

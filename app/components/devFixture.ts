@@ -1141,6 +1141,25 @@ export class MockGame {
         this.setMeWaiting(false);
       }),
 
+    // the long-game verbs only touch the fixture's player view (the dev page is a layout bench, not the rules)
+    wakeImprint: (id) =>
+      this.guard("imprint", () => {
+        if (this.player) this.player = { ...this.player, principles: this.player.principles.map((x) => (x.id === id ? { ...x, dormant: false, weight: 0.7 } : x)) };
+      }),
+    buySlot: () =>
+      this.guard("imprint", () => {
+        if (this.player) this.player = { ...this.player, imprintSlots: { ...this.player.imprintSlots, total: this.player.imprintSlots.total + 1, nextCost: 400 } };
+      }),
+    submitSurvey: (volume, words) =>
+      this.guard("survey", () => {
+        if (this.player) this.player = { ...this.player, survey: { pendingVolume: null, history: [...this.player.survey.history, { volume, words }] } };
+      }),
+    guess: (_id, optionId) =>
+      this.guard("guess", () => {
+        if (this.player?.guess) this.player = { ...this.player, guess: { ...this.player.guess, guessed: optionId } };
+      }),
+    resetSave: () => this.guard("reset", () => undefined),
+
     advance: (opts) =>
       this.guard(
         "advance",

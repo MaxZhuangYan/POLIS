@@ -4,8 +4,12 @@
 一起接活、合作、违约、记仇、借钱。它拿不定主意时会低声问你，它会记住你说过的话，但它有自己的立场：
 证据站在它那边时，它会对你说“不”。
 
-试玩说明见 **[doc/PLAY.md](doc/PLAY.md)**；架构与取舍见 [POLIS_ARCHITECTURE.md](POLIS_ARCHITECTURE.md)、
+试玩说明见 **[doc/PLAY.md](doc/PLAY.md)**；给 AI 编程代理（和人）的工作手册见 **[AGENTS.md](AGENTS.md)**；
+地图怎么改 / 怎么新建见 [doc/MAPS.md](doc/MAPS.md)；架构与取舍见 [POLIS_ARCHITECTURE.md](POLIS_ARCHITECTURE.md)、
 [POLIS_BUILD_DECISIONS.md](POLIS_BUILD_DECISIONS.md)。
+
+第一周之后：六位居民的长期矛盾、默契（猜它会怎么做）、记忆槽位与沉睡的烙印、称号与声望解锁、公告栏、
+日结账本、每周的档案卷与三词问卷、居民之间的传闻。
 
 ## 运行
 
@@ -37,19 +41,25 @@ npm run dev          # 正式规则：1 tick = 现实 1 小时，存档 ./polis.
 | `POLIS_LLM_URL` / `POLIS_LLM_MODEL` / `POLIS_LLM_API_KEY` | 模型端点（OpenAI 兼容 `/v1/chat/completions`）。兼容旧名 `LMSTUDIO_URL` / `LMSTUDIO_MODEL`；默认探测 `http://127.0.0.1:1234` |
 | `POLIS_LLM=off` | 强制离线（规则引擎），不探测模型 |
 | `POLIS_TZ` | 世界时区的兜底值（创建 Agent 时优先用浏览器时区），默认 `Asia/Shanghai` |
+| `POLIS_LLM_CONCURRENCY` | 同时发给模型的请求上限，默认 3（托管端点常有并发限制） |
+| `NEXT_PUBLIC_POLIS_MAP` | 用哪张注册过的地图（`app/components/town/maps.ts`），构建时写入 |
 | `NEXT_DIST_DIR` | 构建输出目录（让多个构建并存，测试脚本用） |
 
 ## 检查
 
 ```bash
-npm run typecheck
-npm run lint
+npm test                        # 一键：类型 → lint → 选择回归 → 寻路 → 地图校验 → 3 天模拟
 npm run build
-npm run test:choose-bugs        # 选择路由回归（临时库、离线）
-npm run test:sim -- careful 7   # 7 天无界面整局模拟（careful | bold），断言事件链与明信片
-npm run test:pathfinding        # 路网连通性与 A* 正确性
-npm run test:distillation-regression   # 需要真实模型；没有模型时只输出“未连接”的报告
+npm run test:sim -- careful 7   # 无界面整局模拟（careful | bold，天数）；SIM_LLM=env 用 .env.local 的模型
+npm run playtest:new            # 真浏览器：新玩家第一局（截图在 playtest-output/new/）
+npm run playtest:week -- bold 9 # 真浏览器：一周多，所有动词和长线面板，最后测「新的存档」
+npm run scenario -- d5-bait     # 造一个停在某个剧情节点的存档，再用 npm run dev:test 打开
+npm run map:check               # 地图校验（doc/MAPS.md）
+node scripts/llm-report.mjs <db>        # 模型调用 / 校验门 / 兜底占比
+npm run test:distillation-regression    # 需要真实模型；没有模型时只输出“未连接”的报告
 ```
+
+本地第一次跑浏览器试玩前执行一次 `npx playwright install chromium`。CI（`.github/workflows/ci.yml`）在每次 push 跑 `npm test` 和构建；浏览器试玩可以在 Actions 页手动触发。
 
 ## 不做的事
 

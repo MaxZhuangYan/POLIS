@@ -46,7 +46,8 @@ export function TitleScreen({
   leaving,
   soundOn,
   onToggleSound,
-  onStart
+  onStart,
+  onMenu
 }: {
   /** my Agent, when a game already exists ("继续"); null for a new player ("开始") */
   me: AgentView | null;
@@ -55,6 +56,8 @@ export function TitleScreen({
   soundOn: boolean;
   onToggleSound: () => void;
   onStart: () => void;
+  /** the secondary title-menu entries (新的存档 / 设置 / 制作名单) */
+  onMenu?: (item: "newsave" | "settings" | "credits") => void;
 }) {
   const startRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -91,6 +94,21 @@ export function TitleScreen({
         ) : (
           <p className={g.save}>给它起个名字，让它入城</p>
         )}
+        {onMenu ? (
+          <nav className={g.subMenu} aria-label="更多">
+            {me ? (
+              <button type="button" className={g.subBtn} onClick={() => onMenu("newsave")} disabled={leaving}>
+                新的存档
+              </button>
+            ) : null}
+            <button type="button" className={g.subBtn} onClick={() => onMenu("settings")} disabled={leaving}>
+              设置
+            </button>
+            <button type="button" className={g.subBtn} onClick={() => onMenu("credits")} disabled={leaving}>
+              制作名单
+            </button>
+          </nav>
+        ) : null}
       </div>
       <button type="button" className={g.soundBtn} onClick={onToggleSound} aria-pressed={soundOn} title={soundOn ? "关闭声音" : "打开声音"}>
         <PixelGlyph rows={soundOn ? GLYPH_SOUND_ON : GLYPH_SOUND_OFF} scale={2} />

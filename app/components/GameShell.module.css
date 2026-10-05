@@ -106,3 +106,22 @@
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* 设置 → 减少动态效果: no pops, blinks or slides anywhere in the HUD (the town keeps walking) */
+.root[data-reduce-motion] *,
+.root[data-reduce-motion] *::before,
+.root[data-reduce-motion] *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition: none !important;
+}
+
+/* the title menu's dialogs (设置 / 制作名单 / 新的存档) above the title screen (z 70) */
+.titleLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+}
+.titleLayer > * {
+  z-index: 90;
+}

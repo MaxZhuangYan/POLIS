@@ -18,7 +18,10 @@
     "map:check": "node scripts/map-check.mjs",
     "map:preview": "python3 scripts/render-town-preview.py",
     "scenario": "node scripts/scenario.mjs",
-    "playtest:new": "node scripts/playtest/new.mjs"
+    "playtest:new": "node scripts/playtest/new.mjs",
+    "playtest:week": "node scripts/playtest/week.mjs",
+    "test": "node scripts/test-all.mjs",
+    "playtest:sizes": "node scripts/playtest/sizes.mjs"
   },
   "dependencies": {
     "@fontsource/fusion-pixel-12px-proportional-sc": "^5.3.0",

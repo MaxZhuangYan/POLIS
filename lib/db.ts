@@ -315,6 +315,15 @@ function createDb(): Database.Database {
     ["meta_json", "TEXT NOT NULL DEFAULT '{}'"],
   ]);
 
+  // 记忆槽位 arrived after some saves already held more than five live imprints: those saves keep them all
+  // (up to the eight-slot cap) instead of having the guardian's past words fall asleep overnight.
+  db.prepare(
+    `UPDATE agents SET memory_slots = MIN(8, (SELECT COUNT(*) FROM principles p WHERE p.agent_id = agents.id
+       AND p.source IN ('llm','fallback','note','revised') AND p.weight >= 0.3))
+     WHERE is_player = 1 AND memory_slots = 5 AND (SELECT COUNT(*) FROM principles p WHERE p.agent_id = agents.id
+       AND p.source IN ('llm','fallback','note','revised') AND p.weight >= 0.3) > 5`,
+  ).run();
+
   addColumns(db, "ledger", [
     // wall-clock of the entry (sim time), for the daily ledger (日结); rows written before this column are skipped there
     ["at_ms", "INTEGER"],

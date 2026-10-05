@@ -38,7 +38,9 @@ export const KEY_HELP: KeyHelpGroup[] = [
       { keys: [["1", "2", "3"]], label: "回应岔路：选第 1 / 2 / 3 个选项" },
       { keys: [["N"]], label: "留言" },
       { keys: [["P"]], label: "明信片" },
-      { keys: [["R"]], label: "烙印" }
+      { keys: [["R"]], label: "烙印（记忆槽位、沉睡的烙印、默契）" },
+      { keys: [["B"]], label: "公告栏：本周履约榜和城里的事" },
+      { keys: [["L"]], label: "账本：每天的进出（日结）" }
     ]
   },
   {

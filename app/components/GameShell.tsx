@@ -30,6 +30,7 @@ import { Drawer, FeedPanel, Inspector, LocationCard, Rail, type DrawerTab } from
 import { Banner, CoachMarks, Dock, FeedbackPrompt, LocateButton, TestPanel, Toasts, type CoachStep, type ToastItem } from "./hud/Overlays";
 import { ForkModal, ImprintModal, JudgmentModal, NoteModal, OnboardingModal, PostcardModal, WaveringModal } from "./hud/Modals";
 import { DayCard, FadeIn, HelpButton, KeyHelp, LoadingScreen, SoundButton, SoundMenu, TitleScreen, WelcomeBackCard } from "./hud/GameScreens";
+import { BoardModal, CreditsModal, GUESS_SEEN_KEY, GuessCard, GuessPill, LedgerModal, NewSaveModal, REDUCE_MOTION_KEY, SettingsModal, SurveyCard } from "./hud/Progress";
 import { townSocialFor } from "./hud/social";
 import { dayNumber, fmtClock } from "./hud/time";
 import { emitToTown, onTown } from "./game/bus";
@@ -51,7 +52,7 @@ export type GameShellProps = {
   mapId?: string;
 };
 
-type UserModal = "note" | "postcards" | "moments" | null;
+type UserModal = "note" | "postcards" | "moments" | "board" | "ledger" | "settings" | null;
 
 const COACH_KEY = "polis.coach.v1.";
 const RATED_KEY = "polis.rated.v1";
@@ -157,7 +158,10 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   const [helpOpen, setHelpOpen] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
   const [dayCard, setDayCard] = useState<{ day: number; key: number } | null>(null);
-  const [welcome, setWelcome] = useState<{ sinceMs: number; awayMs: number } | null>(null);
+  const [welcome, setWelcome] = useState<{
+    sinceMs: number;
+    awayMs: number;
+  } | null>(null);
   const [welcomeDone, setWelcomeDone] = useState(false);
 
   // ?title=0 skips the title screen (dev / QA / tests); everyone else always starts on it
@@ -336,7 +340,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   const effUserModal: UserModal = userModal === "moments" && moments.length === 0 ? null : userModal;
 
   const welcomeOpen = flow === "playing" && !!welcome && !welcomeDone;
-  type Active = "none" | "welcome" | "onboarding" | "fork" | "imprint" | "judgment" | "wavering" | "note" | "postcards" | "moments";
+  type Active = "none" | "welcome" | "onboarding" | "fork" | "imprint" | "judgment" | "wavering" | "note" | "postcards" | "moments" | "board" | "ledger" | "settings";
   let modal: Active = "none";
   if (snapshot && flow === "playing") {
     if (welcomeOpen) modal = "welcome";
@@ -351,12 +355,21 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
 
   const closeModal = useCallback(() => {
     if (modal === "welcome") setWelcomeDone(true);
-    else if (modal === "note" || modal === "postcards" || modal === "moments") setUserModal(null);
+    else if (modal === "note" || modal === "postcards" || modal === "moments" || modal === "board" || modal === "ledger" || modal === "settings") setUserModal(null);
     else if (modal === "judgment" && player?.pendingJudgment) setDismissedJudgment(player.pendingJudgment.id);
     else if (modal === "wavering" && player?.pendingWavering) setDismissedWavering(player.pendingWavering.id);
   }, [modal, player?.pendingJudgment, player?.pendingWavering]);
 
-  const closable = modal === "welcome" || modal === "note" || modal === "postcards" || modal === "moments" || modal === "judgment" || modal === "wavering";
+  const closable =
+    modal === "welcome" ||
+    modal === "note" ||
+    modal === "postcards" ||
+    modal === "moments" ||
+    modal === "judgment" ||
+    modal === "wavering" ||
+    modal === "board" ||
+    modal === "ledger" ||
+    modal === "settings";
 
   const openDecisions = useCallback(() => {
     if (!player) return;
@@ -457,8 +470,16 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     () => [
       { key: "agent", target: "agent", text: "金色光圈就是你守护的 Agent" },
       { key: "activity", target: "activity", text: "它会自己安排一天" },
-      { key: "note", target: "note", text: "想对它说一句话？在这里留言——每天 3 条，50 字以内" },
-      { key: "postcard", target: "postcard", text: `今晚 ${nextPostcardLabel} 它会寄来第一张明信片` }
+      {
+        key: "note",
+        target: "note",
+        text: "想对它说一句话？在这里留言——每天 3 条，50 字以内"
+      },
+      {
+        key: "postcard",
+        target: "postcard",
+        text: `今晚 ${nextPostcardLabel} 它会寄来第一张明信片`
+      }
     ],
     [nextPostcardLabel]
   );
@@ -503,24 +524,26 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   // One listener for the whole session. It reads the volatile UI state through `keyCtx`, so a re-render (every
   // snapshot) never tears it down: a held pan key must not stop because the world ticked.
   const curMoment = modal === "fork" ? (moments[0] ?? null) : modal === "moments" ? (moments[Math.min(momentIdx, moments.length - 1)] ?? null) : null;
-  const keyCtx = useRef({} as {
-    flow: typeof flow;
-    hasSnapshot: boolean;
-    soundOpen: boolean;
-    helpOpen: boolean;
-    coachSkip: (() => void) | null;
-    dayCard: boolean;
-    modal: string;
-    closable: boolean;
-    closeModal: () => void;
-    drawerOpen: boolean;
-    selectedId: string | null;
-    selectedLoc: string | null;
-    curMoment: MomentView | null;
-    choosing: boolean;
-    meId: string | null;
-    actions: GameActions;
-  });
+  const keyCtx = useRef(
+    {} as {
+      flow: typeof flow;
+      hasSnapshot: boolean;
+      soundOpen: boolean;
+      helpOpen: boolean;
+      coachSkip: (() => void) | null;
+      dayCard: boolean;
+      modal: string;
+      closable: boolean;
+      closeModal: () => void;
+      drawerOpen: boolean;
+      selectedId: string | null;
+      selectedLoc: string | null;
+      curMoment: MomentView | null;
+      choosing: boolean;
+      meId: string | null;
+      actions: GameActions;
+    }
+  );
   keyCtx.current = {
     flow,
     hasSnapshot: !!snapshot,
@@ -618,6 +641,8 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
       if (e.code === "KeyQ" || e.key === "-" || e.key === "_") emitToTown("cmd-zoom-step", -1);
       else if (e.code === "KeyE" || e.key === "=" || e.key === "+") emitToTown("cmd-zoom-step", 1);
       else if (e.key === "n" || e.key === "N") setUserModal("note");
+      else if (e.key === "b" || e.key === "B") setUserModal("board");
+      else if (e.key === "l" || e.key === "L") setUserModal("ledger");
       else if (e.key === "p" || e.key === "P") setUserModal("postcards");
       else if (e.key === "r" || e.key === "R") {
         setSelectedId(null);
@@ -701,7 +726,10 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   }, [dayIdx]);
 
   // the town's social web around the resident being inspected
-  const selectedSocial = useMemo(() => (selectedId ? townSocialFor(selectedId, snapshot?.townRelations, agentById) : undefined), [selectedId, snapshot?.townRelations, agentById]);
+  const selectedSocial = useMemo(
+    () => (selectedId ? townSocialFor(selectedId, snapshot?.townRelations, agentById) : undefined),
+    [selectedId, snapshot?.townRelations, agentById]
+  );
 
   // welcome-back card: the town's events since the player last looked, and up to three lines about my Agent
   const welcomeData = useMemo(() => {
@@ -713,7 +741,11 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
           .sort((a, b) => b.atMs - a.atMs || b.id - a.id)
           .slice(0, 3)
       : [];
-    return { count: since.length, capped: snapshot.feed.length >= 40 && since.length >= snapshot.feed.length, lines: mine };
+    return {
+      count: since.length,
+      capped: snapshot.feed.length >= 40 && since.length >= snapshot.feed.length,
+      lines: mine
+    };
   }, [welcome, snapshot, me]);
 
   // title -> game: the title fades to black, then the black clears over the town
@@ -723,10 +755,13 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     sfx("confirm");
     const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     setFlow("leaving");
-    window.setTimeout(() => {
-      setFlow("playing");
-      if (!reduce) setCurtain(true);
-    }, reduce ? 0 : 520);
+    window.setTimeout(
+      () => {
+        setFlow("playing");
+        if (!reduce) setCurtain(true);
+      },
+      reduce ? 0 : 520
+    );
   }, [unlock, sfx]);
 
   // ── delegated sounds: one listener for every button (data-sfx="confirm" | "none" overrides the plain click) ──
@@ -748,6 +783,74 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   // ── render ─────────────────────────────────────────────────────────────
   const clockPill = world ? <ClockPill day={day} clock={clock} night={world.isNight} minutesToTick={minutesToTick} /> : null;
   const pills = world ? <StatusPills world={world} /> : null;
+  // ── the long game: title menu screens, reduce-motion, 默契 guess card, weekly survey, toasts ──
+  const [titleModal, setTitleModal] = useState<"newsave" | "settings" | "credits" | null>(null);
+  useEffect(() => {
+    if (!titleModal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && busy !== "reset") setTitleModal(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [titleModal, busy]);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    try {
+      setReduceMotion(window.localStorage.getItem(REDUCE_MOTION_KEY) === "1");
+    } catch {
+      /* private mode */
+    }
+  }, []);
+  const changeReduceMotion = useCallback((v: boolean) => {
+    setReduceMotion(v);
+    try {
+      window.localStorage.setItem(REDUCE_MOTION_KEY, v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const doReset = useCallback(async () => {
+    const ok = await run(() => actions.resetSave());
+    if (ok) window.location.reload();
+  }, [actions]);
+  const [guessCollapsed, setGuessCollapsed] = useState<number | null>(null);
+  const [surveyLater, setSurveyLater] = useState<number | null>(null);
+  const pendingGuess = player?.guess ?? null;
+  const guessSpeaker = pendingGuess ? (agentById.get(pendingGuess.npc) ?? null) : null;
+  const cardFree = modal === "none" && !showFeedback && flow === "playing";
+  const showGuess = cardFree && !!pendingGuess && guessCollapsed !== pendingGuess.id;
+  const showGuessPill = cardFree && !!pendingGuess && guessCollapsed === pendingGuess.id;
+  const surveyVolume = player?.survey.pendingVolume ?? null;
+  const showSurvey = cardFree && !pendingGuess && surveyVolume !== null && surveyLater !== surveyVolume;
+  // a resolved guess, told once per browser; the hall opening its errands, told once per session
+  const lastGuess = player?.attunement.last ?? null;
+  useEffect(() => {
+    if (!lastGuess || flow !== "playing") return;
+    let seenId = 0;
+    try {
+      seenId = Number(window.localStorage.getItem(GUESS_SEEN_KEY) || 0);
+    } catch {
+      /* ignore */
+    }
+    if (lastGuess.id <= seenId) return;
+    try {
+      window.localStorage.setItem(GUESS_SEEN_KEY, String(lastGuess.id));
+    } catch {
+      /* ignore */
+    }
+    if (seenId === 0 && Date.now() - lastGuess.atMs > 6 * 3_600_000 && !world?.testMode) return; // an old one on a new device
+    pushToast(lastGuess.correct ? `你猜对了：它选了「${lastGuess.actual}」` : `它选了「${lastGuess.actual}」，不是你猜的「${lastGuess.guessed}」`, "judgment");
+    sfx(lastGuess.correct ? "imprint" : "moment");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastGuess?.id, flow]);
+  const hallOpen = player?.progression.hallCommissions ?? false;
+  const hallWas = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (hallWas.current === false && hallOpen) pushToast("议事厅委托开始向它开放了（声望 35）", "player");
+    hallWas.current = hallOpen;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hallOpen]);
+
   const rail = player ? (
     <Rail
       active={drawer}
@@ -758,11 +861,15 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         setDrawer((cur) => (cur === t ? null : t));
       }}
       onPostcards={() => setUserModal("postcards")}
+      onBoard={() => setUserModal((cur) => (cur === "board" ? null : "board"))}
+      onLedger={() => setUserModal((cur) => (cur === "ledger" ? null : "ledger"))}
+      boardOpen={modal === "board"}
+      ledgerOpen={modal === "ledger"}
     />
   ) : null;
 
   return (
-    <div className={styles.root} lang="zh-CN" onPointerDownCapture={onRootPointerDown} onClickCapture={onRootClick}>
+    <div className={styles.root} lang="zh-CN" data-reduce-motion={reduceMotion ? "" : undefined} onPointerDownCapture={onRootPointerDown} onClickCapture={onRootClick}>
       <PhaserTown
         ref={townRef}
         snapshot={snapshot}
@@ -785,7 +892,9 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
           ) : null}
 
           <div className={hud.leftCol}>
-            {me && player ? <AgentCard agent={me} trust={player.trust} onOpenPrinciples={() => setDrawer("principles")} /> : null}
+            {me && player ? (
+              <AgentCard agent={me} trust={player.trust} progression={player.progression} compact={phone} onOpenPrinciples={() => setDrawer("principles")} />
+            ) : null}
             {phone && me ? <ActionBar agent={me} simNow={simNow} /> : null}
             {phone ? <OffsetNote world={world} /> : null}
             <FeedPanel feed={snapshot.feed} open={feedOpen} onToggle={() => setFeedOpen((v) => !v)} onPick={pickFeed} />
@@ -821,7 +930,20 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
           {soundOpen ? <SoundMenu settings={audio.settings} status={audio.status} onUpdate={audio.update} onClose={() => setSoundOpen(false)} /> : null}
 
           {drawer && player ? (
-            <Drawer tab={drawer} onTab={setDrawer} onClose={() => setDrawer(null)} player={player} agents={agents} simNowTz={tz} />
+            <Drawer
+              tab={drawer}
+              onTab={setDrawer}
+              onClose={() => setDrawer(null)}
+              player={player}
+              agents={agents}
+              simNowTz={tz}
+              imprints={{
+                busy: busyIs("imprint"),
+                error: busy === null && error ? error : null,
+                onWake: (id, sleepId) => void run(() => actions.wakeImprint(id, sleepId)),
+                onBuySlot: () => void run(() => actions.buySlot())
+              }}
+            />
           ) : null}
 
           {selectedAgent && !drawer ? (
@@ -855,6 +977,10 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
                 townRef.current?.focusAgent(id);
               }}
               onClose={() => setSelectedLoc(null)}
+              onBoard={() => {
+                setSelectedLoc(null);
+                setUserModal("board");
+              }}
             />
           ) : null}
 
@@ -882,6 +1008,30 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
                 void run(() => actions.feedback(recentJ.id, v));
               }}
               onDismiss={() => markRated(recentJ.id)}
+            />
+          ) : null}
+
+          {showGuess && pendingGuess && me ? (
+            <GuessCard
+              guess={pendingGuess}
+              speaker={guessSpeaker}
+              me={me}
+              simNow={simNow}
+              busy={busyIs("guess")}
+              onGuess={(optionId) => void run(() => actions.guess(pendingGuess.id, optionId))}
+              onCollapse={() => setGuessCollapsed(pendingGuess.id)}
+            />
+          ) : null}
+          {showGuessPill ? <GuessPill onOpen={() => setGuessCollapsed(null)} /> : null}
+          {showSurvey && surveyVolume !== null && me ? (
+            <SurveyCard
+              key={surveyVolume}
+              volume={surveyVolume}
+              name={me.name}
+              busy={busyIs("survey")}
+              error={busy === null && error ? error : null}
+              onSubmit={(words) => void run(() => actions.submitSurvey(surveyVolume, words))}
+              onLater={() => setSurveyLater(surveyVolume)}
             />
           ) : null}
 
@@ -919,7 +1069,10 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
           moment={moments[0]}
           speaker={moments[0].speakerId ? (agentById.get(moments[0].speakerId) ?? null) : null}
           me={me}
-          step={{ index: Math.min(forkTotal.current, forkTotal.current - moments.length + 1), total: forkTotal.current }}
+          step={{
+            index: Math.min(forkTotal.current, forkTotal.current - moments.length + 1),
+            total: forkTotal.current
+          }}
           simNow={simNow}
           busy={busyIs("choose")}
           error={errorForModal}
@@ -941,7 +1094,11 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
                 simNow={simNow}
                 busy={busyIs("choose")}
                 error={errorForModal}
-                queue={{ index: idx, total: moments.length, onPick: setMomentIdx }}
+                queue={{
+                  index: idx,
+                  total: moments.length,
+                  onPick: setMomentIdx
+                }}
                 onChoose={(optionId) => void run(() => actions.choose(mo.id, optionId))}
                 onLater={closeModal}
               />
@@ -950,7 +1107,13 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         : null}
 
       {modal === "imprint" && player ? (
-        <ImprintModal principles={player.principles} distilling={player.distilling} busy={busy !== null && busy !== "advance"} error={errorForModal} onAck={() => void run(() => actions.ackOnboarding())} />
+        <ImprintModal
+          principles={player.principles}
+          distilling={player.distilling}
+          busy={busy !== null && busy !== "advance"}
+          error={errorForModal}
+          onAck={() => void run(() => actions.ackOnboarding())}
+        />
       ) : null}
 
       {modal === "judgment" && me && player?.pendingJudgment ? (
@@ -979,7 +1142,15 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
       ) : null}
 
       {modal === "note" && player ? (
-        <NoteModal left={player.notes.leftToday} items={player.notes.items} tz={tz} busy={busyIs("note")} error={errorForModal} onSend={(text) => run(() => actions.sendNote(text))} onClose={closeModal} />
+        <NoteModal
+          left={player.notes.leftToday}
+          items={player.notes.items}
+          tz={tz}
+          busy={busyIs("note")}
+          error={errorForModal}
+          onSend={(text) => run(() => actions.sendNote(text))}
+          onClose={closeModal}
+        />
       ) : null}
 
       {modal === "postcards" && player ? (
@@ -990,10 +1161,16 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
           initialId={null}
           onRead={(id) => void run(() => actions.readPostcard(id))}
           onClose={closeModal}
+          onLedger={() => setUserModal("ledger")}
         />
       ) : null}
 
-      {coachStep ? <CoachMarks step={coachStep} index={coachIndex} total={coachSteps.length} getPlayerScreen={getPlayerScreen} onNext={coachNext} onSkip={coachSkip} /> : null}
+      {modal === "board" && snapshot?.board ? <BoardModal board={snapshot.board} meId={me?.id ?? null} tz={tz} onClose={closeModal} /> : null}
+      {modal === "ledger" && player ? <LedgerModal ledger={player.ledger} today={player.dayIndex} onClose={closeModal} /> : null}
+
+      {coachStep ? (
+        <CoachMarks step={coachStep} index={coachIndex} total={coachSteps.length} getPlayerScreen={getPlayerScreen} onNext={coachNext} onSkip={coachSkip} />
+      ) : null}
 
       {helpOpen && flow === "playing" ? <KeyHelp onClose={() => setHelpOpen(false)} /> : null}
 
@@ -1007,7 +1184,36 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
           soundOn={audio.settings.music || audio.settings.sfx}
           onToggleSound={audio.toggleAll}
           onStart={startGame}
+          onMenu={(item) => setTitleModal(item)}
         />
+      ) : null}
+      {/* the title screen sits at z-index 70: its menu dialogs go in a layer above it */}
+      {!loading && flow === "title" && titleModal ? (
+        <div className={styles.titleLayer}>
+          {titleModal === "credits" ? <CreditsModal onClose={() => setTitleModal(null)} /> : null}
+          {titleModal === "settings" ? (
+            <SettingsModal
+              music={audio.settings.music}
+              sfx={audio.settings.sfx}
+              musicVol={audio.settings.musicVol}
+              sfxVol={audio.settings.sfxVol}
+              reduceMotion={reduceMotion}
+              onAudio={audio.update}
+              onReduceMotion={changeReduceMotion}
+              onNewSave={me ? () => setTitleModal("newsave") : undefined}
+              onClose={() => setTitleModal(null)}
+            />
+          ) : null}
+          {titleModal === "newsave" ? (
+            <NewSaveModal
+              hasSave={!!me}
+              busy={busyIs("reset")}
+              error={busy === null && error ? error : null}
+              onConfirm={() => void doReset()}
+              onClose={() => setTitleModal(null)}
+            />
+          ) : null}
+        </div>
       ) : null}
 
       {curtain ? <FadeIn onDone={() => setCurtain(false)} /> : null}
