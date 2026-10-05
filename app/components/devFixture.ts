@@ -14,6 +14,7 @@ import type {
   PlayerView,
   PostcardView,
   PrincipleView,
+  TownRelationView,
   WaveringView
 } from "@/lib/types";
 import type { BusyKey, GameActions } from "./actions";
@@ -153,6 +154,42 @@ const MY_REASONS: string[] = [
   "它想起你留的话：『答应过的事不丢』",
   "上次 Sol 的账出过岔子，这次它先核对再动手"
 ];
+
+/** the town's social web (directed edges: how well `from` knows `to`, and the grudge `from` still holds) */
+function mkTownRelations(withPlayer: boolean): TownRelationView[] {
+  const e = (from: string, to: string, familiarity: number, coopDone: number, grudge: string | null = null): TownRelationView => ({ from, to, familiarity, coopDone, grudge });
+  const out: TownRelationView[] = [
+    e("mira", "tao", 72, 5),
+    e("tao", "mira", 68, 5),
+    e("mira", "sol", 41, 1),
+    e("sol", "mira", 38, 1),
+    e("mira", "iris", 55, 2),
+    e("iris", "mira", 52, 2),
+    e("sol", "tao", 22, 0, "说好的炭火价钱，事后涨了三成，一句解释也没有"),
+    e("tao", "sol", 18, 0, "收了定金又改了交货的日子，让他白等了两天"),
+    e("kade", "nova", 35, 1, "中途撤出一单押运，让搭档独自扛了风险"),
+    e("nova", "kade", 33, 1),
+    e("kade", "iris", 60, 3),
+    e("iris", "kade", 58, 3),
+    e("nova", "sol", 28, 1),
+    e("sol", "nova", 30, 1),
+    e("iris", "sol", 15, 0, "借走的旧档，过了期限还没有归还")
+  ];
+  if (withPlayer) {
+    out.push(
+      e(ME_ID, "mira", 64, 3),
+      e("mira", ME_ID, 58, 3),
+      e(ME_ID, "sol", 31, 1, "口头承诺的价钱和账面不符"),
+      e("sol", ME_ID, 24, 1),
+      e(ME_ID, "tao", 48, 2),
+      e("tao", ME_ID, 44, 2),
+      e("kade", ME_ID, 40, 0),
+      e(ME_ID, "kade", 40, 0),
+      e("nova", ME_ID, 12, 0, "答应带路却在城门口改了主意")
+    );
+  }
+  return out;
+}
 
 // ───────────────────────────── templates ─────────────────────────────
 
@@ -454,7 +491,40 @@ export class MockGame {
     if (hasPlayer) this.makePlayer(scene);
     this.syncPlayerAgent();
     this.relocateAll(false);
+    this.seedHistory();
     this.emit();
+  }
+
+  /** a few hours of town life before "now", so the welcome-back card has something to count and quote */
+  private seedHistory(): void {
+    if (this.feed.length > 0 || !this.player) return;
+    const sim = this.simNow();
+    const me = this.playerName;
+    const at = (hoursAgo: number) => sim - hoursAgo * HOUR;
+    const clockOf = (ms: number) => {
+      const { hour, minute } = this.hourOf(ms);
+      return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    };
+    const rows: [number, FeedItem["kind"], string, string[], boolean, FeedItem["importance"]][] = [
+      [0.7, "task", `${me} 在市集帮 Mira 搬了一批木料，赚了 6 Scrip。`, [ME_ID, "mira"], true, 2],
+      [1.4, "relationship", `${me} 和 Kade 聊起了公告栏的事，熟悉度 +3。`, [ME_ID, "kade"], true, 2],
+      [2.2, "coop", "Mira 和 Tao 谈妥了一笔合作。", ["mira", "tao"], false, 2],
+      [2.6, "refuse", `${me} 婉拒了 Sol 的一笔高价订单：『稳定的积累胜过一次豪赌』`, [ME_ID, "sol"], true, 3],
+      [3.5, "default", "Sol 对 Tao 违约了一次，声望 −2。", ["sol", "tao"], false, 3],
+      [4.5, "task", `${me} 在档案馆抄录了一份旧档。`, [ME_ID, "iris"], true, 1],
+      [5.2, "system", "公告栏更新：市集今日香料涨价 8%。", ["sol"], false, 1]
+    ];
+    this.feed = rows.map(([h, kind, text, actors, involvesPlayer, importance]) => ({
+      id: ++this.feedId,
+      atMs: at(h),
+      dayIndex: 0,
+      clock: clockOf(at(h)),
+      kind,
+      text,
+      actors,
+      involvesPlayer,
+      importance
+    }));
   }
 
   private makePlayer(scene: FixtureScene): void {
@@ -894,7 +964,8 @@ export class MockGame {
       },
       agents,
       feed: this.feed,
-      player: this.player
+      player: this.player,
+      townRelations: mkTownRelations(this.player !== null)
     };
     return this.snapshot;
   }

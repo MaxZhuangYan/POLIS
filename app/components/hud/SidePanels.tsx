@@ -2,7 +2,8 @@
 
 import { useMemo, type ReactNode } from "react";
 import type { AgentView, FeedItem, PlayerView, RelationshipView } from "@/lib/types";
-import { Btn, Icon, PrincipleTablet, Portrait } from "./common";
+import { Btn, CloseGlyph, GLYPH_DOWN, GLYPH_RIGHT, Icon, PixelGlyph, PrincipleTablet, Portrait } from "./common";
+import type { TownSocial } from "./social";
 import { fmtClock } from "./time";
 import styles from "./hud.module.css";
 
@@ -38,12 +39,12 @@ export function FeedPanel({
   const items = useMemo(() => [...feed].sort((a, b) => b.atMs - a.atMs || b.id - a.id).slice(0, 40), [feed]);
   return (
     <section className={`${styles.panel} ${styles.feed} ${open ? "" : styles.feedClosed}`} aria-label="小镇动态">
-      <button type="button" className={styles.feedHead} onClick={onToggle} aria-expanded={open}>
-        <Icon name="game" size={18} />
+      <button type="button" className={styles.feedHead} onClick={onToggle} aria-expanded={open} title="展开 / 收起（F）">
+        <Icon name="game" size={16} />
         <span className={styles.feedTitle}>小镇动态</span>
         <span className={styles.feedCount}>{items.length}</span>
         <span className={styles.chev} aria-hidden>
-          {open ? "▾" : "▸"}
+          <PixelGlyph rows={open ? GLYPH_DOWN : GLYPH_RIGHT} scale={2} />
         </span>
       </button>
       {open ? (
@@ -88,13 +89,13 @@ export function Rail({
 }) {
   const btn = (key: string, icon: string, label: string, on: boolean, click: () => void, badge?: number) => (
     <button key={key} type="button" className={`${styles.railBtn} ${on ? styles.railBtnOn : ""}`} onClick={click} aria-pressed={on} title={label}>
-      <Icon name={icon} size={26} />
+      <Icon name={icon} size={32} />
       <span className={styles.railLabel}>{label}</span>
       {badge ? <span className={styles.badge}>{badge}</span> : null}
     </button>
   );
   return (
-    <nav className={styles.rail} aria-label="抽屉">
+    <nav className={`${styles.bar} ${styles.rail}`} aria-label="抽屉">
       {btn("principles", "thoughts", "烙印", active === "principles", () => onDrawer("principles"))}
       {btn("relations", "relations", "关系", active === "relations", () => onDrawer("relations"))}
       {btn("memories", "diary", "记忆", active === "memories", () => onDrawer("memories"))}
@@ -134,7 +135,7 @@ export function Drawer({
           ))}
         </div>
         <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="关闭">
-          ✕
+          <CloseGlyph />
         </button>
       </header>
       <div className={styles.drawerBody}>
@@ -186,7 +187,7 @@ function RelationCard({ rel, other, tz }: { rel: RelationshipView; other: AgentV
   return (
     <li className={styles.relCard}>
       <div className={styles.relHead}>
-        <Portrait sprite={other?.sprite ?? "rookie"} size={44} />
+        <Portrait sprite={other?.sprite ?? "rookie"} size={48} />
         <div className={styles.relWho}>
           <strong>{other?.name ?? rel.otherId}</strong>
           <span>{other?.role ?? ""}</span>
@@ -242,7 +243,7 @@ function HelpTab() {
         <li>它有自己的立场：它可能 <b>照做</b>、<b>调整</b>，或 <b>拒绝</b>。拒绝时你可以强制执行，但要付出 30 Scrip，它对你的信任也会 −10。</li>
         <li>有时它会被人说动，回来 <b>质问</b> 自己的某条原则。你可以让它重申，或让它修订。</li>
         <li>每天最多 3 条 <b>留言</b>（50 字以内）。它不会秒回，会在夜里的 <b>明信片</b> 里回应你。</li>
-        <li>拖动镜头、滚轮缩放；点居民看他的近况。</li>
+        <li>拖动镜头、滚轮缩放；点居民看他的近况。键盘：WASD 移动镜头，Space 找到它，按 <b>?</b> 看全部按键。</li>
       </ul>
     </div>
   );
@@ -259,6 +260,7 @@ export function Inspector({
   onFollow,
   onClose,
   onOpenPrinciples,
+  social,
   extra
 }: {
   agent: AgentView;
@@ -269,13 +271,15 @@ export function Inspector({
   onFollow: () => void;
   onClose: () => void;
   onOpenPrinciples: () => void;
+  /** the town's social web around this resident (城里的关系); omitted when the snapshot carries none */
+  social?: TownSocial;
   extra?: ReactNode;
 }) {
   const fam = rel ? Math.max(0, Math.min(100, rel.familiarity)) : 0;
   return (
     <aside className={`${styles.panel} ${styles.inspector}`} aria-label="居民档案">
       <header className={styles.insHead}>
-        <Portrait sprite={agent.sprite} size={56} player={isMine} />
+        <Portrait sprite={agent.sprite} size={48} player={isMine} />
         <div className={styles.insWho}>
           <strong>
             {isMine ? "★ " : ""}
@@ -284,8 +288,8 @@ export function Inspector({
           </strong>
           <span className={styles.insPers}>{agent.personality}</span>
         </div>
-        <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="关闭">
-          ✕
+        <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="关闭（Esc）">
+          <CloseGlyph />
         </button>
       </header>
       <p className={styles.activity}>
@@ -318,6 +322,38 @@ export function Inspector({
           ) : (
             <p className={styles.relLast}>还没有往来。</p>
           )}
+        </div>
+      ) : null}
+      {social && (social.top.length > 0 || social.held.length > 0 || social.against.length > 0) ? (
+        <div className={styles.insTown} aria-label="城里的关系">
+          <h4>城里的关系</h4>
+          {social.top.length > 0 ? (
+            <ul className={styles.townTies}>
+              {social.top.map((t) => (
+                <li key={t.id} title={`熟悉度 ${t.familiarity}/100 · 一起完成 ${t.coopDone} 次`}>
+                  <span className={styles.tieName}>{t.name}</span>
+                  <span className={styles.famTrack}>
+                    <i style={{ width: `${Math.max(0, Math.min(100, t.familiarity))}%` }} />
+                  </span>
+                  <span className={styles.famNum}>{t.familiarity}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className={styles.relLast}>还没和谁熟起来。</p>
+          )}
+          {social.held.map((gr) => (
+            <p key={`h${gr.id}`} className={styles.grudge}>
+              <b>记着 {gr.name}：</b>
+              {gr.text}
+            </p>
+          ))}
+          {social.against.map((gr) => (
+            <p key={`a${gr.id}`} className={`${styles.grudge} ${styles.grudgeAgainst}`}>
+              <b>被 {gr.name} 记着：</b>
+              {gr.text}
+            </p>
+          ))}
         </div>
       ) : null}
       {lines.length > 0 ? (
@@ -372,19 +408,19 @@ export function LocationCard({
     <aside className={`${styles.panel} ${styles.inspector}`} aria-label={`${label}`} data-location={id}>
       <header className={styles.insHead}>
         <span className={styles.locBadge} aria-hidden>
-          <Icon name={id === "home" ? "home" : "pin"} size={26} />
+          <Icon name={id === "home" ? "home" : "pin"} size={32} />
         </span>
         <div className={styles.insWho}>
           <strong>{label}</strong>
           <span className={styles.insPers}>{owner ? `${owner.name} 的据点 · ${owner.role}` : "公共场所"}</span>
         </div>
-        <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="关闭">
-          ✕
+        <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="关闭（Esc）">
+          <CloseGlyph />
         </button>
       </header>
       {owner ? (
         <button type="button" className={styles.locOwner} onClick={() => onPick(owner.id)} title="查看他的近况">
-          <Portrait sprite={owner.sprite} size={40} />
+          <Portrait sprite={owner.sprite} size={48} />
           <span>
             <b>{owner.name}</b>
             <i>{owner.activityText}</i>
@@ -398,7 +434,7 @@ export function LocationCard({
             {here.map((a) => (
               <li key={a.id}>
                 <button type="button" className={styles.locChip} onClick={() => onPick(a.id)}>
-                  <Portrait sprite={a.sprite} size={28} player={a.isPlayer} />
+                  <Portrait sprite={a.sprite} size={32} player={a.isPlayer} />
                   <span>{a.isPlayer ? `★ ${a.name}` : a.name}</span>
                 </button>
               </li>

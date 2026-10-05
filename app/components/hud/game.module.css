@@ -1,0 +1,702 @@
+/* The game-shell screens: loading, title, "第 N 天" card, welcome back, key help, sound popover.
+   Tokens come from GameShell's .root. Pixel font at 12 / 24 / 36 / 48 / 72 px only. */
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* outlined pixel text (hard 2 px outline in every direction, no blur) */
+.outlined {
+  text-shadow:
+    -2px -2px 0 var(--edge),
+    0 -2px 0 var(--edge),
+    2px -2px 0 var(--edge),
+    -2px 0 0 var(--edge),
+    2px 0 0 var(--edge),
+    -2px 2px 0 var(--edge),
+    0 2px 0 var(--edge),
+    2px 2px 0 var(--edge);
+}
+
+/* ───────────── loading ───────────── */
+
+.loading {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(ellipse at 50% 42%, #4a2c18 0%, #2a170b 55%, #170c05 100%);
+  color: var(--cream);
+}
+.loadingBox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 0 16px;
+}
+.loadingTitle {
+  margin: 0;
+  font-size: 72px;
+  line-height: 72px;
+  font-weight: 400;
+  letter-spacing: 6px;
+  padding-left: 6px;
+  color: var(--gold);
+  text-shadow:
+    -3px -3px 0 var(--edge),
+    0 -3px 0 var(--edge),
+    3px -3px 0 var(--edge),
+    -3px 0 0 var(--edge),
+    3px 0 0 var(--edge),
+    -3px 3px 0 var(--edge),
+    3px 3px 0 var(--edge),
+    0 6px 0 #7c4f08,
+    0 9px 0 var(--edge),
+    -3px 6px 0 var(--edge),
+    3px 6px 0 var(--edge);
+}
+.bar {
+  width: min(380px, 84vw);
+  display: grid;
+  grid-template-columns: repeat(20, 1fr);
+  gap: 2px;
+  height: 40px;
+  padding: 0 0;
+  border: 8px solid transparent;
+  border-image: var(--frame-slot) 4 fill / 8px stretch;
+}
+.bar i {
+  background: #4a2c18;
+  margin: 2px 0;
+}
+.bar i.barOn {
+  background: var(--gold);
+  box-shadow: inset 0 2px 0 var(--gold-hi), inset 0 -2px 0 var(--gold-dk);
+}
+.loadingText {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--cream-2);
+}
+.loadingPct {
+  font-size: 24px;
+  line-height: 30px;
+  color: var(--gold-hi);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ───────────── title ───────────── */
+
+.title {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  padding: 16px;
+  text-align: center;
+  color: var(--cream);
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* the live town shows through; a vignette keeps the lettering readable at day and at night */
+.shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 46%, rgba(20, 10, 4, 0.1) 0%, rgba(20, 10, 4, 0.45) 55%, rgba(20, 10, 4, 0.82) 100%),
+    linear-gradient(180deg, rgba(20, 10, 4, 0.28), rgba(20, 10, 4, 0.1) 40%, rgba(20, 10, 4, 0.38));
+}
+.logoBox {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 36px 120px 40px;
+  /* a soft dark glow so the lettering stays readable over the busiest part of the town */
+  background: radial-gradient(ellipse closest-side, rgba(20, 10, 4, 0.66) 0%, rgba(20, 10, 4, 0.5) 60%, rgba(20, 10, 4, 0) 100%);
+}
+.logo {
+  margin: 0;
+  font-size: 72px;
+  line-height: 72px;
+  font-weight: 400;
+  letter-spacing: 6px;
+  padding-left: 6px;
+  color: var(--gold);
+  text-shadow:
+    -3px -3px 0 var(--edge),
+    0 -3px 0 var(--edge),
+    3px -3px 0 var(--edge),
+    -3px 0 0 var(--edge),
+    3px 0 0 var(--edge),
+    -3px 3px 0 var(--edge),
+    3px 3px 0 var(--edge),
+    0 6px 0 #7c4f08,
+    0 9px 0 var(--edge),
+    -3px 6px 0 var(--edge),
+    3px 6px 0 var(--edge);
+  animation: logoBob 3.2s steps(1) infinite;
+}
+@keyframes logoBob {
+  0%,
+  50% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-2px);
+  }
+  75% {
+    transform: translateY(2px);
+  }
+}
+.tagline {
+  margin: 0;
+  font-size: 24px;
+  line-height: 30px;
+  color: var(--cream);
+  text-shadow:
+    -2px -2px 0 var(--edge),
+    0 -2px 0 var(--edge),
+    2px -2px 0 var(--edge),
+    -2px 0 0 var(--edge),
+    2px 0 0 var(--edge),
+    -2px 2px 0 var(--edge),
+    0 2px 0 var(--edge),
+    2px 2px 0 var(--edge);
+}
+.menu {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.startBtn {
+  min-width: 240px;
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 0 16px;
+  border: 8px solid transparent;
+  border-image: var(--btn-gold) 4 fill / 8px stretch;
+  background: none;
+  color: var(--edge);
+  font-size: 36px;
+  line-height: 44px;
+  cursor: pointer;
+  filter: drop-shadow(0 4px 0 rgba(43, 24, 13, 0.55));
+}
+.startBtn:hover:not(:disabled) {
+  border-image-source: var(--btn-gold-hover);
+}
+.startBtn:active:not(:disabled) {
+  border-image-source: var(--btn-gold-down);
+  transform: translateY(2px);
+}
+.startBtn:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 3px;
+  box-shadow: var(--focus);
+}
+.startArrow {
+  width: 16px;
+  height: 28px;
+  background: var(--edge);
+  clip-path: polygon(0 0, 4px 0, 4px 4px, 8px 4px, 8px 8px, 12px 8px, 12px 12px, 16px 12px, 16px 16px, 12px 16px, 12px 20px, 8px 20px, 8px 24px, 4px 24px, 4px 28px, 0 28px);
+  animation: arrowBlink 1s steps(1) infinite;
+}
+@keyframes arrowBlink {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+/* the save slot: a wooden plaque with my Agent */
+.save {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 4px;
+  border: 10px solid transparent;
+  border-image: var(--frame-wood) 5 / 10px stretch;
+  background: repeating-linear-gradient(0deg, var(--wood-2) 0 10px, #5e3921 10px 12px);
+  background-clip: padding-box;
+  color: var(--cream);
+  font-size: 24px;
+  line-height: 30px;
+}
+.soundBtn {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border: 8px solid transparent;
+  border-image: var(--btn-tile) 4 fill / 8px stretch;
+  background: none;
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.soundBtn:hover {
+  border-image-source: var(--btn-tile-hover);
+}
+.soundBtn:active {
+  border-image-source: var(--btn-tile-down);
+  transform: translateY(2px);
+}
+.soundBtn:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
+}
+.credit {
+  position: absolute;
+  left: 16px;
+  bottom: 12px;
+  margin: 0;
+  max-width: calc(100% - 200px);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--cream-2);
+  text-align: left;
+  text-shadow: 0 2px 0 var(--edge);
+}
+.curtainOut {
+  position: absolute;
+  inset: 0;
+  background: #0b0604;
+  opacity: 0;
+  pointer-events: none;
+}
+.titleLeaving .curtainOut {
+  animation: curtainOut 0.5s steps(5) forwards;
+}
+@keyframes curtainOut {
+  to {
+    opacity: 1;
+  }
+}
+.curtainIn {
+  position: absolute;
+  inset: 0;
+  z-index: 110;
+  background: #0b0604;
+  pointer-events: none;
+  animation: curtainIn 0.7s steps(7) forwards;
+}
+@keyframes curtainIn {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ───────────── day card ───────────── */
+
+.dayWrap {
+  position: absolute;
+  inset: 0;
+  z-index: 65;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 22%;
+  pointer-events: none;
+}
+.dayCard {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 4px 28px 6px;
+  border: 10px solid transparent;
+  border-image: var(--frame-wood) 5 / 10px stretch;
+  background: repeating-linear-gradient(0deg, var(--wood-2) 0 10px, #5e3921 10px 12px);
+  background-clip: padding-box;
+  color: var(--cream);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.4s steps(4),
+    transform 0.4s steps(4);
+  filter: drop-shadow(0 4px 0 rgba(43, 24, 13, 0.5));
+}
+.dayIn {
+  opacity: 1;
+  transform: none;
+}
+.dayOut {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition-duration: 0.5s;
+}
+.daySmall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--cream-2);
+}
+.dayBig {
+  font-size: 48px;
+  line-height: 60px;
+  color: var(--gold-hi);
+  text-shadow: 0 3px 0 #7c4f08, 0 6px 0 var(--edge);
+}
+
+/* ───────────── welcome back ───────────── */
+
+.welcomeCount {
+  margin: 0;
+  font-size: 24px;
+  line-height: 36px;
+}
+.welcomeCount b {
+  font-weight: 400;
+  padding: 0 6px;
+  background: var(--gold);
+  box-shadow: 0 2px 0 var(--gold-dk);
+}
+.welcomeLines {
+  padding: 4px 10px;
+  border: 2px dashed var(--ink-3);
+  background: rgba(255, 255, 255, 0.4);
+}
+.welcomeLines h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.welcomeLines ul {
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.welcomeLines li {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
+.welcomeLines time {
+  flex: none;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.welcomeQuiet {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.welcomeActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.welcomeActions > * {
+  width: 100%;
+}
+
+/* ───────────── key help ───────────── */
+
+.keyGroups {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.keyGroup h3 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 400;
+  color: var(--gold-ink);
+}
+.keyGroup ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.keyGroup li {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 12px;
+  align-items: center;
+  min-height: 28px;
+}
+.keyCaps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.keyAlt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.keyAlt em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-right: 2px;
+}
+.keyLabel {
+  font-size: 12px;
+  line-height: 18px;
+}
+.keyNote {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* ───────────── HUD system buttons + sound popover ───────────── */
+
+.hudBtn {
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 8px solid transparent;
+  border-image: var(--btn-tile) 4 fill / 8px stretch;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  filter: drop-shadow(0 3px 0 rgba(43, 24, 13, 0.4));
+}
+.hudBtn:hover {
+  border-image-source: var(--btn-tile-hover);
+}
+.hudBtn:active {
+  border-image-source: var(--btn-tile-down);
+  transform: translateY(2px);
+}
+.hudBtnOn {
+  border-image-source: var(--btn-tile-on);
+}
+.hudBtn:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
+}
+.hudBtnText {
+  font-size: 24px;
+  line-height: 24px;
+}
+
+.soundMenu {
+  position: absolute;
+  right: 12px;
+  top: calc(var(--top, 12px) + 56px);
+  width: 320px;
+  z-index: 20;
+  pointer-events: auto;
+  padding: 0 2px 4px;
+  border: 10px solid transparent;
+  border-image: var(--frame-paper) 5 fill / 10px stretch;
+  color: var(--ink);
+  filter: drop-shadow(0 4px 0 rgba(43, 24, 13, 0.45));
+}
+.soundMenu h3 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 400;
+}
+.soundClose {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 8px solid transparent;
+  border-image: var(--btn-tile) 4 fill / 8px stretch;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.soundClose:hover {
+  border-image-source: var(--btn-tile-hover);
+}
+.volRow {
+  display: grid;
+  grid-template-columns: 52px 56px 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.volTitle {
+  font-size: 24px;
+  line-height: 30px;
+}
+.switch {
+  height: 40px;
+  padding: 0;
+  border: 8px solid transparent;
+  border-image: var(--btn-off) 4 fill / 8px stretch;
+  background: none;
+  color: #7d6a50;
+  font-size: 12px;
+  cursor: pointer;
+}
+.switchOn {
+  border-image-source: var(--btn-gold);
+  color: var(--edge);
+}
+.switch:focus-visible,
+.range:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
+}
+.range {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 40px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.range::-webkit-slider-runnable-track {
+  height: 12px;
+  background: #3a2210;
+  border: 2px solid var(--edge);
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 28px;
+  margin-top: -10px;
+  background: var(--gold);
+  border: 2px solid var(--edge);
+  box-shadow: inset 0 2px 0 var(--gold-hi), inset 0 -2px 0 var(--gold-dk);
+}
+.range::-moz-range-track {
+  height: 8px;
+  background: #3a2210;
+  border: 2px solid var(--edge);
+}
+.range::-moz-range-thumb {
+  width: 12px;
+  height: 24px;
+  border-radius: 0;
+  background: var(--gold);
+  border: 2px solid var(--edge);
+}
+.range:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.soundNote {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
+
+/* ───────────── phone ───────────── */
+
+@media (max-width: 900px) {
+  .loadingTitle,
+  .logo {
+    font-size: 48px;
+    line-height: 48px;
+    letter-spacing: 4px;
+  }
+  .title {
+    gap: 24px;
+  }
+  .startBtn {
+    min-width: 200px;
+    min-height: 64px;
+    font-size: 36px;
+  }
+  .credit {
+    left: 8px;
+    bottom: 8px;
+    max-width: calc(100% - 150px);
+  }
+  .soundBtn {
+    right: 8px;
+    bottom: 8px;
+  }
+  .dayWrap {
+    padding-top: 30%;
+  }
+  .dayBig {
+    font-size: 36px;
+    line-height: 48px;
+  }
+  .keyGroup li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .soundMenu {
+    right: 4px;
+    top: calc(var(--top, 8px) + 52px);
+    width: min(320px, calc(100% - 8px));
+  }
+  .hudBtn {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo,
+  .startArrow,
+  .titleLeaving .curtainOut,
+  .curtainIn {
+    animation: none;
+  }
+  .dayCard {
+    transition: none;
+  }
+}

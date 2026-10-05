@@ -7,18 +7,33 @@
 // Guardian-spirit rules this UI keeps: no free chat, no needs bars, no direct
 // control of the Agent. The player only answers forks (岔路), judgments, wavering
 // challenges, leaves ≤50-char notes and reads the nightly postcard.
+//
+// It is also the game's shell: loading screen -> title screen -> play, the music bed
+// (title / day / night), sound effects derived from snapshot diffs, the keyboard map
+// (game/keymap.ts), the "第 N 天" card and the welcome-back card.
+//
+// Typography (decided by screenshot, see hud/*.module.css): the pixel font at 12 px for all chrome
+// and small text, at 24 px for headings, buttons, key numbers AND for the prose that carries the
+// story (fork prompts, the Agent's judgment speech, postcards). Fusion Pixel's CJK glyphs are
+// designed on a 12 px grid and stay perfectly readable at 24 px, so the long texts keep the same
+// pixel look as the chrome instead of switching to a system font.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentView, FeedItem, GameSnapshot, LocationId } from "@/lib/types";
+import type { AgentView, FeedItem, GameSnapshot, LocationId, MomentView } from "@/lib/types";
 import type { BusyKey, GameActions } from "./actions";
 import PhaserTown, { type PhaserTownHandle } from "./town/PhaserTown";
 import { readLocationMeta, type LocationMeta, type TiledMap } from "./town/tiled";
-import { TOWN_MAP_URL } from "./game/keys";
+import { TOWN_MAP_URL, ensurePixelFont, type BgmMode } from "./game/keys";
 import { AgentCard, ActionBar, ClockPill, OffsetNote, StatusPills } from "./hud/TopHud";
 import { Drawer, FeedPanel, Inspector, LocationCard, Rail, type DrawerTab } from "./hud/SidePanels";
-import { Banner, CoachMarks, Dock, FeedbackPrompt, LoadingScreen, LocateButton, TestPanel, Toasts, type CoachStep, type ToastItem } from "./hud/Overlays";
+import { Banner, CoachMarks, Dock, FeedbackPrompt, LocateButton, TestPanel, Toasts, type CoachStep, type ToastItem } from "./hud/Overlays";
 import { ForkModal, ImprintModal, JudgmentModal, NoteModal, OnboardingModal, PostcardModal, WaveringModal } from "./hud/Modals";
+import { DayCard, FadeIn, HelpButton, KeyHelp, LoadingScreen, SoundButton, SoundMenu, TitleScreen, WelcomeBackCard } from "./hud/GameScreens";
+import { townSocialFor } from "./hud/social";
 import { dayNumber, fmtClock } from "./hud/time";
+import { emitToTown, onTown } from "./game/bus";
+import { useAudio } from "./game/useAudio";
+import { PAN_CODES, isTypingTarget } from "./game/keymap";
 import hud from "./hud/hud.module.css";
 import styles from "./GameShell.module.css";
 
@@ -66,10 +81,41 @@ function readRated(): number[] {
   }
 }
 
+// "welcome back": where the sim clock stood when the player last looked (per Agent, in sim ms)
+const LAST_SEEN_KEY = "polis.lastSeenSimMs.v1";
+const AWAY_THRESHOLD_MS = 2 * 3_600_000;
+
+function readLastSeen(): { ms: number; createdAtMs: number } | null {
+  try {
+    const raw = window.localStorage.getItem(LAST_SEEN_KEY);
+    const v = raw ? (JSON.parse(raw) as { ms?: unknown; createdAtMs?: unknown }) : null;
+    return v && typeof v.ms === "number" && typeof v.createdAtMs === "number" ? { ms: v.ms, createdAtMs: v.createdAtMs } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastSeen(ms: number, createdAtMs: number): void {
+  try {
+    window.localStorage.setItem(LAST_SEEN_KEY, JSON.stringify({ ms: Math.round(ms), createdAtMs }));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** "3 小时" / "2 天 5 小时" */
+function fmtAway(ms: number): string {
+  const hours = Math.max(0, Math.floor(ms / 3_600_000));
+  if (hours < 24) return `${hours} 小时`;
+  const d = Math.floor(hours / 24);
+  const h = hours % 24;
+  return h === 0 ? `${d} 天` : `${d} 天 ${h} 小时`;
+}
+
 function useIsPhone(): boolean {
   const [phone, setPhone] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 760px)");
+    const mq = window.matchMedia("(max-width: 900px)");
     const update = () => setPhone(mq.matches);
     update();
     mq.addEventListener("change", update);
@@ -93,6 +139,64 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   const me: AgentView | null = player?.agent ?? null;
   const phone = useIsPhone();
 
+  // ── game flow: loading -> title -> playing ─────────────────────────────
+  const audio = useAudio();
+  const { sfx, setBgm, unlock } = audio;
+  const [flow, setFlow] = useState<"title" | "leaving" | "playing">("title");
+  const flowRef = useRef(flow);
+  useEffect(() => {
+    flowRef.current = flow;
+  }, [flow]);
+  const [boot, setBoot] = useState({ pct: 0, sceneReady: false });
+  const [fontReady, setFontReady] = useState(false);
+  const [curtain, setCurtain] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [soundOpen, setSoundOpen] = useState(false);
+  const [dayCard, setDayCard] = useState<{ day: number; key: number } | null>(null);
+  const [welcome, setWelcome] = useState<{ sinceMs: number; awayMs: number } | null>(null);
+  const [welcomeDone, setWelcomeDone] = useState(false);
+
+  // ?title=0 skips the title screen (dev / QA / tests); everyone else always starts on it
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("title") === "0") setFlow("playing");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    let off = false;
+    void ensurePixelFont().then(() => {
+      if (!off) setFontReady(true);
+    });
+    return () => {
+      off = true;
+    };
+  }, []);
+  // the Preloader's real progress, and "the town is on screen" (then the scene wants to know if we are on the title)
+  useEffect(() => {
+    const offProgress = onTown("load-progress", (v) => setBoot((b) => ({ ...b, pct: Math.max(b.pct, v) })));
+    const offReady = onTown("scene-ready", () => {
+      setBoot((b) => ({ ...b, pct: 1, sceneReady: true }));
+      emitToTown("cmd-title-mode", flowRef.current !== "playing");
+    });
+    return () => {
+      offProgress();
+      offReady();
+    };
+  }, []);
+  useEffect(() => {
+    emitToTown("cmd-title-mode", flow !== "playing");
+  }, [flow]);
+  const loading = !snapshot || !boot.sceneReady || !fontReady;
+
+  // music bed: the title's, then day 06:00-19:59 / night, crossfaded by the AudioManager
+  const hour = world?.hour ?? 12;
+  const bgmMode: BgmMode = flow !== "playing" ? "title" : hour >= 6 && hour < 20 ? "day" : "night";
+  useEffect(() => {
+    setBgm(bgmMode);
+  }, [bgmMode, setBgm]);
+
   // ── agents & time ──────────────────────────────────────────────────────
   const agents = useMemo(() => {
     const map = new Map<string, AgentView>();
@@ -112,6 +216,40 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   }, []);
   const simNow = world ? world.simNowMs + Math.max(0, nowPerf - receivedAt) : 0;
   const tz = world?.tz ?? "UTC";
+  const simNowRef = useRef(0);
+  simNowRef.current = simNow;
+
+  // welcome back: decided once, from the last-seen clock stored by the previous session
+  const welcomeInit = useRef(false);
+  const createdAtMs = player?.createdAtMs ?? null;
+  useEffect(() => {
+    if (welcomeInit.current || !snapshot || !snapshot.player) return;
+    welcomeInit.current = true;
+    const seen = readLastSeen();
+    if (seen && seen.createdAtMs === snapshot.player.createdAtMs) {
+      const away = snapshot.world.simNowMs - seen.ms;
+      if (away >= AWAY_THRESHOLD_MS) setWelcome({ sinceMs: seen.ms, awayMs: away });
+    }
+  }, [snapshot]);
+  // ... and kept up to date while the player is here
+  useEffect(() => {
+    if (createdAtMs === null) return;
+    const save = () => {
+      if (simNowRef.current > 0 && welcomeInit.current) writeLastSeen(simNowRef.current, createdAtMs);
+    };
+    const h = window.setInterval(save, 10_000);
+    const onHide = () => {
+      if (document.visibilityState === "hidden") save();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", save);
+    return () => {
+      window.clearInterval(h);
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", save);
+      save();
+    };
+  }, [createdAtMs]);
 
   // ── town interaction ───────────────────────────────────────────────────
   const townRef = useRef<PhaserTownHandle>(null);
@@ -193,10 +331,12 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   if (player?.onboarding === "forks") forkTotal.current = Math.max(forkTotal.current, moments.length);
   const effUserModal: UserModal = userModal === "moments" && moments.length === 0 ? null : userModal;
 
-  type Active = "none" | "onboarding" | "fork" | "imprint" | "judgment" | "wavering" | "note" | "postcards" | "moments";
+  const welcomeOpen = flow === "playing" && !!welcome && !welcomeDone;
+  type Active = "none" | "welcome" | "onboarding" | "fork" | "imprint" | "judgment" | "wavering" | "note" | "postcards" | "moments";
   let modal: Active = "none";
-  if (snapshot) {
-    if (!player) modal = "onboarding";
+  if (snapshot && flow === "playing") {
+    if (welcomeOpen) modal = "welcome";
+    else if (!player) modal = "onboarding";
     else if (player.onboarding === "forks") modal = moments.length > 0 ? "fork" : "none";
     else if (player.onboarding === "imprint") modal = "imprint";
     else if (effUserModal) modal = effUserModal;
@@ -205,12 +345,13 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   }
 
   const closeModal = useCallback(() => {
-    if (modal === "note" || modal === "postcards" || modal === "moments") setUserModal(null);
+    if (modal === "welcome") setWelcomeDone(true);
+    else if (modal === "note" || modal === "postcards" || modal === "moments") setUserModal(null);
     else if (modal === "judgment" && player?.pendingJudgment) setDismissedJudgment(player.pendingJudgment.id);
     else if (modal === "wavering" && player?.pendingWavering) setDismissedWavering(player.pendingWavering.id);
   }, [modal, player?.pendingJudgment, player?.pendingWavering]);
 
-  const closable = modal === "note" || modal === "postcards" || modal === "moments" || modal === "judgment" || modal === "wavering";
+  const closable = modal === "welcome" || modal === "note" || modal === "postcards" || modal === "moments" || modal === "judgment" || modal === "wavering";
 
   const openDecisions = useCallback(() => {
     if (!player) return;
@@ -243,6 +384,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     const prev = prevSnap.current;
     prevSnap.current = snapshot;
     if (!snapshot || !prev) return;
+    const playing = flowRef.current === "playing";
     const out: { text: string; tone: ToastItem["tone"] }[] = [];
     const seenFeed = new Set(prev.feed.map((f) => f.id));
     for (const f of snapshot.feed) {
@@ -252,6 +394,16 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     }
     const pl = snapshot.player;
     const pp = prev.player;
+    if (pl && pp && playing) {
+      // sound effects, derived from what changed since the last snapshot
+      const oldMoments = new Set(pp.pendingMoments.map((m) => m.id));
+      if (pl.pendingMoments.some((m) => !oldMoments.has(m.id))) sfx("moment");
+      const oldCardIds = new Set(pp.postcards.items.map((c) => c.id));
+      if (pl.postcards.items.some((c) => !c.read && !oldCardIds.has(c.id))) sfx("postcard");
+      const oldPrinciples = new Set(pp.principles.map((p) => p.id));
+      if (pl.principles.some((p) => !oldPrinciples.has(p.id))) sfx("imprint");
+      if (pl.agent.scrip > pp.agent.scrip) sfx("coin");
+    }
     if (pl && pp) {
       if (pl.onboarding === "done") {
         const old = new Set(pp.principles.map((p) => p.id));
@@ -272,8 +424,8 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         out.push({ text: t, tone: "judgment" });
       }
     }
-    for (const t of out.slice(0, 3)) pushToast(t.text, t.tone);
-  }, [snapshot]);
+    if (playing) for (const t of out.slice(0, 3)) pushToast(t.text, t.tone);
+  }, [snapshot, sfx]);
 
   // ── judgment feedback (inline) ─────────────────────────────────────────
   const [rated, setRated] = useState<Set<number>>(new Set());
@@ -306,8 +458,8 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     [nextPostcardLabel]
   );
   // coach marks wait (queue) while anything else is on screen: modals, drawers, the inspector, the feedback panel
-  const overlayOpen = modal !== "none" || drawer !== null || selectedId !== null || selectedLoc !== null || showFeedback;
-  const coachReady = !!player && player.onboarding === "done" && !overlayOpen && seen !== null;
+  const overlayOpen = modal !== "none" || helpOpen || soundOpen || drawer !== null || selectedId !== null || selectedLoc !== null || showFeedback;
+  const coachReady = flow === "playing" && !!player && player.onboarding === "done" && !overlayOpen && seen !== null;
   const coachPending = seen ? coachSteps.filter((s) => !seen.has(s.key)) : [];
   const coachStep = coachReady && coachPending.length > 0 ? coachPending[0] : null;
   const coachIndex = coachStep ? coachSteps.findIndex((s) => s.key === coachStep.key) : 0;
@@ -335,20 +487,159 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
     }
   }, [coachKey, meId]);
 
-  // ── keyboard ───────────────────────────────────────────────────────────
+  // ── more sound effects: a judgment modal opens (voice), an error banner appears (error) ──
+  const prevModal = useRef<string>("none");
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (coachStep) coachSkip();
-      else if (modal !== "none") {
-        if (closable) closeModal();
-      } else if (drawer) setDrawer(null);
-      else if (selectedId) setSelectedId(null);
-      else if (selectedLoc) setSelectedLoc(null);
+    if (modal === "judgment" && prevModal.current !== "judgment") sfx("voice");
+    prevModal.current = modal;
+  }, [modal, sfx]);
+
+  // ── keyboard: the map is in game/keymap.ts (and the ? overlay) ─────────
+  // One listener for the whole session. It reads the volatile UI state through `keyCtx`, so a re-render (every
+  // snapshot) never tears it down: a held pan key must not stop because the world ticked.
+  const curMoment = modal === "fork" ? (moments[0] ?? null) : modal === "moments" ? (moments[Math.min(momentIdx, moments.length - 1)] ?? null) : null;
+  const keyCtx = useRef({} as {
+    flow: typeof flow;
+    hasSnapshot: boolean;
+    soundOpen: boolean;
+    helpOpen: boolean;
+    coachSkip: (() => void) | null;
+    dayCard: boolean;
+    modal: string;
+    closable: boolean;
+    closeModal: () => void;
+    drawerOpen: boolean;
+    selectedId: string | null;
+    selectedLoc: string | null;
+    curMoment: MomentView | null;
+    choosing: boolean;
+    meId: string | null;
+    actions: GameActions;
+  });
+  keyCtx.current = {
+    flow,
+    hasSnapshot: !!snapshot,
+    soundOpen,
+    helpOpen,
+    coachSkip: coachStep ? coachSkip : null,
+    dayCard: !!dayCard,
+    modal,
+    closable,
+    closeModal,
+    drawerOpen: drawer !== null,
+    selectedId,
+    selectedLoc,
+    curMoment,
+    choosing: busy === "choose",
+    meId: me?.id ?? null,
+    actions
+  };
+  useEffect(() => {
+    const held = new Set<string>();
+    let lastVx = 0;
+    let lastVy = 0;
+    let spaceDown = false;
+    const pushPan = () => {
+      let vx = 0;
+      let vy = 0;
+      for (const code of held) {
+        const v = PAN_CODES[code];
+        if (v) {
+          vx += v[0];
+          vy += v[1];
+        }
+      }
+      vx = Math.max(-1, Math.min(1, vx));
+      vy = Math.max(-1, Math.min(1, vy));
+      if (vx !== lastVx || vy !== lastVy) {
+        lastVx = vx;
+        lastVy = vy;
+        emitToTown("cmd-pan", vx, vy);
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [coachStep, coachSkip, modal, closable, closeModal, drawer, selectedId, selectedLoc]);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return; // browser shortcuts (Cmd+R ...) stay the browser's
+      const k = keyCtx.current;
+      if (e.key === "Escape") {
+        if (k.soundOpen) setSoundOpen(false);
+        else if (k.helpOpen) setHelpOpen(false);
+        else if (k.coachSkip) k.coachSkip();
+        else if (k.dayCard) setDayCard(null);
+        else if (k.modal !== "none") {
+          if (k.closable) k.closeModal();
+        } else if (k.drawerOpen) setDrawer(null);
+        else if (k.selectedId) setSelectedId(null);
+        else if (k.selectedLoc) setSelectedLoc(null);
+        return;
+      }
+      if (isTypingTarget(e.target) || k.flow !== "playing" || !k.hasSnapshot) return;
+      // ? or H: the key help (above everything, even a fork card)
+      if (e.key === "?" || e.key === "h" || e.key === "H") {
+        e.preventDefault();
+        if (!e.repeat) setHelpOpen((v) => !v);
+        return;
+      }
+      if (k.helpOpen) return;
+      // 1 / 2 / 3: answer the open fork card
+      if ((k.modal === "fork" || k.modal === "moments") && /^[1-3]$/.test(e.key)) {
+        const opt = k.curMoment?.options[Number(e.key) - 1];
+        const moment = k.curMoment;
+        if (moment && opt && !k.choosing && !e.repeat) {
+          e.preventDefault();
+          sfx("confirm");
+          void run(() => k.actions.choose(moment.id, opt.id));
+        }
+        return;
+      }
+      if (k.modal !== "none") return;
+      if (PAN_CODES[e.code]) {
+        e.preventDefault();
+        held.add(e.code);
+        pushPan();
+        return;
+      }
+      if (e.repeat) return;
+      if (e.code === "Space") {
+        // Space = find my Agent and follow it (it must not also "click" a focused button)
+        e.preventDefault();
+        spaceDown = true;
+        if (k.meId) {
+          setFollowId(k.meId);
+          townRef.current?.setFollow(k.meId);
+        }
+        return;
+      }
+      if (e.code === "KeyQ" || e.key === "-" || e.key === "_") emitToTown("cmd-zoom-step", -1);
+      else if (e.code === "KeyE" || e.key === "=" || e.key === "+") emitToTown("cmd-zoom-step", 1);
+      else if (e.key === "n" || e.key === "N") setUserModal("note");
+      else if (e.key === "p" || e.key === "P") setUserModal("postcards");
+      else if (e.key === "r" || e.key === "R") {
+        setSelectedId(null);
+        setDrawer((cur) => (cur === "principles" ? null : "principles"));
+      } else if (e.key === "f" || e.key === "F") setFeedOpen((v) => !v);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (held.delete(e.code)) pushPan();
+      if (e.code === "Space" && spaceDown) {
+        spaceDown = false;
+        e.preventDefault();
+      }
+    };
+    const onBlur = () => {
+      held.clear();
+      pushPan();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+      held.clear();
+      pushPan();
+    };
+  }, [sfx]);
 
   // ── derived view data ──────────────────────────────────────────────────
   const selectedAgent = selectedId ? (agentById.get(selectedId) ?? null) : null;
@@ -384,9 +675,69 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   const errorForModal = error;
   const showErrorBanner = !!error && modal === "none" && errDismissed !== error;
   const bannerCount = (connection === "retrying" ? 1 : 0) + (showErrorBanner ? 1 : 0);
-  const topPx = (phone ? 8 : 12) + bannerCount * 40;
+  const topPx = (phone ? 8 : 12) + bannerCount * 52;
 
   const busyIs = (k: BusyKey) => busy === k;
+
+  // a new error (banner, or the line inside a dialog) -> the error sound
+  useEffect(() => {
+    if (error && flowRef.current === "playing") sfx("error");
+  }, [error, sfx]);
+
+  // "第 N 天": when the Agent's day count goes up while the player is here
+  const dayIdx = player?.dayIndex ?? null;
+  const prevDayIdx = useRef<number | null>(null);
+  useEffect(() => {
+    const prev = prevDayIdx.current;
+    prevDayIdx.current = dayIdx;
+    if (dayIdx === null || prev === null || dayIdx <= prev) return;
+    if (flowRef.current === "playing") setDayCard({ day: dayIdx + 1, key: Date.now() });
+  }, [dayIdx]);
+
+  // the town's social web around the resident being inspected
+  const selectedSocial = useMemo(() => (selectedId ? townSocialFor(selectedId, snapshot?.townRelations, agentById) : undefined), [selectedId, snapshot?.townRelations, agentById]);
+
+  // welcome-back card: the town's events since the player last looked, and up to three lines about my Agent
+  const welcomeData = useMemo(() => {
+    if (!welcome || !snapshot) return null;
+    const since = snapshot.feed.filter((f) => f.atMs > welcome.sinceMs);
+    const mine = me
+      ? since
+          .filter((f) => f.involvesPlayer || f.actors.includes(me.id))
+          .sort((a, b) => b.atMs - a.atMs || b.id - a.id)
+          .slice(0, 3)
+      : [];
+    return { count: since.length, capped: snapshot.feed.length >= 40 && since.length >= snapshot.feed.length, lines: mine };
+  }, [welcome, snapshot, me]);
+
+  // title -> game: the title fades to black, then the black clears over the town
+  const startGame = useCallback(() => {
+    if (flowRef.current !== "title") return;
+    unlock();
+    sfx("confirm");
+    const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    setFlow("leaving");
+    window.setTimeout(() => {
+      setFlow("playing");
+      if (!reduce) setCurtain(true);
+    }, reduce ? 0 : 520);
+  }, [unlock, sfx]);
+
+  // ── delegated sounds: one listener for every button (data-sfx="confirm" | "none" overrides the plain click) ──
+  const unlockedRef = useRef(false);
+  useEffect(() => {
+    unlockedRef.current = audio.status ? !audio.status.locked : false;
+  }, [audio.status]);
+  const onRootPointerDown = () => {
+    if (!unlockedRef.current) unlock(); // the first gesture of the session: let the browser play sound
+  };
+  const onRootClick = (e: React.MouseEvent) => {
+    const el = (e.target as HTMLElement | null)?.closest<HTMLElement>("button, [role=button], [role=tab], [role=switch]");
+    if (!el || (el as HTMLButtonElement).disabled || flowRef.current === "leaving") return;
+    const kind = el.dataset.sfx ?? el.closest<HTMLElement>("[data-sfx]")?.dataset.sfx;
+    if (kind === "none") return;
+    sfx(kind === "confirm" ? "confirm" : "click");
+  };
 
   // ── render ─────────────────────────────────────────────────────────────
   const clockPill = world ? <ClockPill day={day} clock={clock} night={world.isNight} minutesToTick={minutesToTick} /> : null;
@@ -405,7 +756,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   ) : null;
 
   return (
-    <div className={styles.root} lang="zh-CN">
+    <div className={styles.root} lang="zh-CN" onPointerDownCapture={onRootPointerDown} onClickCapture={onRootClick}>
       <PhaserTown
         ref={townRef}
         snapshot={snapshot}
@@ -417,7 +768,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
         debug={debugTown}
       />
 
-      {snapshot && world ? (
+      {snapshot && world && flow === "playing" ? (
         <div className={styles.hud} style={{ ["--top" as string]: `${topPx}px` }}>
           {bannerCount > 0 ? (
             <div className={hud.banners}>
@@ -436,6 +787,9 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
           {phone ? (
             <div className={hud.rightCol}>
               {clockPill}
+              <div className={hud.sysRow}>
+                <SoundButton open={soundOpen} on={audio.settings.music || audio.settings.sfx} onToggle={() => setSoundOpen((v) => !v)} />
+              </div>
               {pills}
               {rail}
             </div>
@@ -446,10 +800,18 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
                 {me ? <ActionBar agent={me} simNow={simNow} /> : null}
                 <OffsetNote world={world} />
               </div>
-              <div className={hud.topRight}>{pills}</div>
+              <div className={hud.topRight}>
+                {pills}
+                <div className={hud.sysRow}>
+                  <HelpButton onClick={() => setHelpOpen(true)} />
+                  <SoundButton open={soundOpen} on={audio.settings.music || audio.settings.sfx} onToggle={() => setSoundOpen((v) => !v)} />
+                </div>
+              </div>
               {rail}
             </>
           )}
+
+          {soundOpen ? <SoundMenu settings={audio.settings} status={audio.status} onUpdate={audio.update} onClose={() => setSoundOpen(false)} /> : null}
 
           {drawer && player ? (
             <Drawer tab={drawer} onTab={setDrawer} onClose={() => setDrawer(null)} player={player} agents={agents} simNowTz={tz} />
@@ -468,6 +830,7 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
                 setSelectedId(null);
                 setDrawer("principles");
               }}
+              social={selectedSocial}
             />
           ) : null}
 
@@ -521,6 +884,26 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
       ) : null}
 
       {/* ── modals ── */}
+      {modal === "welcome" && welcome && welcomeData && player ? (
+        <WelcomeBackCard
+          awayLabel={fmtAway(welcome.awayMs)}
+          eventCount={welcomeData.count}
+          eventsCapped={welcomeData.capped}
+          lines={welcomeData.lines}
+          unread={player.postcards.unread}
+          pending={pendingCount}
+          onPostcards={() => {
+            setWelcomeDone(true);
+            setUserModal("postcards");
+          }}
+          onRespond={() => {
+            setWelcomeDone(true);
+            openDecisions();
+          }}
+          onClose={() => setWelcomeDone(true)}
+        />
+      ) : null}
+
       {modal === "onboarding" ? <OnboardingModal busy={busyIs("create")} error={errorForModal} onCreate={(input) => void run(() => actions.createAgent(input))} /> : null}
 
       {modal === "fork" && me && moments[0] ? (
@@ -605,7 +988,24 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
 
       {coachStep ? <CoachMarks step={coachStep} index={coachIndex} total={coachSteps.length} getPlayerScreen={getPlayerScreen} onNext={coachNext} onSkip={coachSkip} /> : null}
 
-      {!snapshot ? <LoadingScreen /> : null}
+      {helpOpen && flow === "playing" ? <KeyHelp onClose={() => setHelpOpen(false)} /> : null}
+
+      {dayCard && flow === "playing" ? <DayCard key={dayCard.key} day={dayCard.day} night={!!world?.isNight} onDone={() => setDayCard(null)} /> : null}
+
+      {!loading && (flow === "title" || flow === "leaving") ? (
+        <TitleScreen
+          me={me}
+          day={day}
+          leaving={flow === "leaving"}
+          soundOn={audio.settings.music || audio.settings.sfx}
+          onToggleSound={audio.toggleAll}
+          onStart={startGame}
+        />
+      ) : null}
+
+      {curtain ? <FadeIn onDone={() => setCurtain(false)} /> : null}
+
+      {loading ? <LoadingScreen progress={boot.pct} waitingForTown={boot.sceneReady && fontReady} /> : null}
     </div>
   );
 }

@@ -22,7 +22,7 @@ import {
 import { PathFinder, type TilePoint } from "@/app/components/town/pathfinding";
 import { animKey, frameIndex, spriteTexture, type Direction } from "@/app/components/town/characters";
 import { EventBus } from "../EventBus";
-import { BG_COLOR, DEPTH, KEYS, MAP_ABOVE_LAYER, MAP_LAYERS, SCENES, emoteTexture } from "../keys";
+import { BG_COLOR, DEPTH, KEYS, MAP_ABOVE_LAYER, MAP_LAYERS, PIXEL_FONT, SCENES, emoteTexture } from "../keys";
 
 // ───────────────────────────── public surface ─────────────────────────────
 
@@ -37,7 +37,10 @@ export interface TownApi {
 
 // ───────────────────────────── constants ─────────────────────────────
 
-const FONT = '"PingFang SC","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei",sans-serif';
+// Every in-world text uses the one pixel font (keys.ts), drawn at 12 px (names, places, bubbles) so its 12 px grid lands
+// on whole screen pixels: the label containers are scaled by 1/zoom, which makes the net screen scale exactly 1.
+const FONT = PIXEL_FONT;
+const INK = "#2b180d"; // deep brown: text outlines and bubble text
 const MAX_ZOOM = 4;
 const ZOOM_STEPS = [1, 1.5, 2, 2.5, 3, 4];
 const DEFAULT_ZOOM = 2;
@@ -325,6 +328,13 @@ export class TownScene extends Phaser.Scene implements TownApi {
   private zoomAnim: { target: number; sx: number; sy: number } | null = null;
   private camAnim: { t: number; dur: number; id: string; zoomTo: number; fromX: number; fromY: number; fromZ: number } | null = null;
   private didInitialCenter = false;
+  // title screen: slow drift over the town (no follow, no input)
+  private titleMode = false;
+  private titlePath: Pt[] = [];
+  private titleTarget = 0;
+  private titleVel: Pt = { x: 0, y: 0 };
+  // held-key pan (-1..1 per axis), set by the React key handler
+  private panVec: Pt = { x: 0, y: 0 };
   private downAt: { x: number; y: number } | null = null;
   private dragged = false;
   private pinch: { dist: number } | null = null;
@@ -356,12 +366,47 @@ export class TownScene extends Phaser.Scene implements TownApi {
     this.startCamAnim(id, Math.max(this.cameras.main.zoom, this.defaultZoom()));
   }
 
+  /** title screen on: the camera drifts slowly across the town and ignores follow; off: back to my Agent */
+  setTitleMode(on: boolean): void {
+    if (this.titleMode === on) return;
+    this.titleMode = on;
+    this.panVec = { x: 0, y: 0 };
+    if (on) {
+      this.camAnim = null;
+      this.zoomAnim = null;
+      this.titleVel = { x: 0, y: 0 };
+      // start the drift with the waypoint nearest to where the camera already is
+      const c = this.centerOf();
+      let best = 0;
+      this.titlePath.forEach((p, i) => {
+        if (dist(p, c) < dist(this.titlePath[best], c)) best = i;
+      });
+      this.titleTarget = (best + 1) % Math.max(1, this.titlePath.length);
+    } else {
+      this.userZoomed = false;
+      this.recenterOnPlayer();
+    }
+  }
+
+  /** held-key pan; any non-zero pan ends "follow" (the same as dragging the map) */
+  setPan(vx: number, vy: number): void {
+    this.panVec = { x: clamp(vx, -1, 1), y: clamp(vy, -1, 1) };
+  }
+
+  /** one zoom step in (+1) / out (-1) around the screen centre (keyboard Q / E, - / =) */
+  zoomStep(dir: 1 | -1): void {
+    if (!this.ready || this.titleMode) return;
+    const cam = this.cameras.main;
+    this.stepZoom(dir, cam.width / 2, cam.height / 2);
+  }
+
   // ───────────── phaser lifecycle ─────────────
 
   create(): void {
     this.debug = this.registry.get("debug") === true;
-    // (the canvas renderer ignores text resolution when drawing, so keep it 1 there)
-    this.labelRes = this.game.renderer.type === Phaser.WEBGL ? Math.max(2, Math.min(3, Math.ceil(window.devicePixelRatio || 1))) : 1;
+    // pixel font: text is drawn 1:1 (resolution 1) and the canvas is shown with image-rendering: pixelated, so every
+    // glyph pixel is a whole screen pixel on any display density
+    this.labelRes = 1;
 
     // data model + path finder from the very same map the tile layers are drawn from
     const raw = this.cache.tilemap.get(KEYS.map).data as TiledMap;
@@ -387,9 +432,10 @@ export class TownScene extends Phaser.Scene implements TownApi {
     this.buildPlaceLabels();
     this.hoverGfx = this.add.graphics().setDepth(DEPTH.hover);
     this.hoverTip = this.add
-      .text(0, 0, "", { fontFamily: FONT, fontSize: "15px", fontStyle: "bold", color: "#f2c75c", stroke: "#0b1020", strokeThickness: 5 })
+      .text(0, 0, "", { fontFamily: FONT, fontSize: "12px", color: "#ffe08a", stroke: INK, strokeThickness: 3 })
       .setOrigin(0.5, 1)
       .setResolution(this.labelRes)
+      .setShadow(0, 1, INK, 0, true, true)
       .setVisible(false);
     this.uiLayer.add(this.hoverTip);
 
@@ -414,12 +460,18 @@ export class TownScene extends Phaser.Scene implements TownApi {
     EventBus.on("cmd-select", this.setSelected, this);
     EventBus.on("cmd-follow", this.setFollow, this);
     EventBus.on("cmd-focus", this.focusAgent, this);
+    EventBus.on("cmd-title-mode", this.setTitleMode, this);
+    EventBus.on("cmd-pan", this.setPan, this);
+    EventBus.on("cmd-zoom-step", this.zoomStep, this);
     const unhook = () => {
       this.scale.off("resize", this.onResize, this);
       EventBus.off("cmd-snapshot", this.setSnapshot, this);
       EventBus.off("cmd-select", this.setSelected, this);
       EventBus.off("cmd-follow", this.setFollow, this);
       EventBus.off("cmd-focus", this.focusAgent, this);
+      EventBus.off("cmd-title-mode", this.setTitleMode, this);
+      EventBus.off("cmd-pan", this.setPan, this);
+      EventBus.off("cmd-zoom-step", this.zoomStep, this);
     };
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, unhook);
     this.events.once(Phaser.Scenes.Events.DESTROY, unhook);
@@ -427,6 +479,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     this.onResize();
     cam.setZoom(clamp(this.defaultZoom(), this.minZoom, MAX_ZOOM));
     cam.centerOn(this.mapW / 2, this.mapH / 2);
+    this.buildTitlePath();
 
     this.ready = true;
     this.syncResidents();
@@ -450,13 +503,13 @@ export class TownScene extends Phaser.Scene implements TownApi {
   // ───────────── textures ─────────────
 
   private makeTextures(): void {
-    const mk = (key: string, w: number, h: number, draw: (ctx: CanvasRenderingContext2D) => void) => {
+    const mk = (key: string, w: number, h: number, draw: (ctx: CanvasRenderingContext2D) => void, nearest = false) => {
       if (this.textures.exists(key)) return;
       const tex = this.textures.createCanvas(key, w, h);
       if (!tex) return;
       draw(tex.getContext());
       tex.refresh();
-      tex.setFilter(Phaser.Textures.FilterMode.LINEAR);
+      tex.setFilter(nearest ? Phaser.Textures.FilterMode.NEAREST : Phaser.Textures.FilterMode.LINEAR);
     };
     mk("shadow", 64, 28, (c) => {
       const g = c.createRadialGradient(32, 14, 2, 32, 14, 30);
@@ -496,30 +549,67 @@ export class TownScene extends Phaser.Scene implements TownApi {
       c.ellipse(42, 20, 30, 11, 0, 0, Math.PI * 2);
       c.stroke();
     });
-    mk("emote-bg", 32, 32, (c) => {
-      c.fillStyle = "rgba(255,252,240,0.96)";
-      c.strokeStyle = "#2b3350";
-      c.lineWidth = 2;
-      c.beginPath();
-      c.arc(16, 16, 14, 0, Math.PI * 2);
-      c.fill();
-      c.stroke();
-    });
-    // pixel glyph emotes that have no icon asset
-    const glyph = (key: string, rows: string[], px: number, fg: string) => {
-      mk(key, 64, 64, (c) => {
-        c.fillStyle = fg;
-        const w = rows[0].length * px;
-        const h = rows.length * px;
-        const ox = Math.round((64 - w) / 2);
-        const oy = Math.round((64 - h) / 2);
+    // pixel emote plate: a 22x22 cream square with stepped corners, a deep-brown outline and a 1 px drop shadow
+    mk(
+      "emote-bg",
+      22,
+      23,
+      (c) => {
+        const plate = (ox: number, oy: number, color: string) => {
+          c.fillStyle = color;
+          c.fillRect(ox + 2, oy, 18, 22);
+          c.fillRect(ox, oy + 2, 22, 18);
+          c.fillRect(ox + 1, oy + 1, 20, 20);
+        };
+        plate(0, 1, "rgba(43,24,13,0.45)");
+        plate(0, 0, "#2b180d");
+        c.fillStyle = "#fbeed6";
+        c.fillRect(3, 1, 16, 20);
+        c.fillRect(1, 3, 20, 16);
+        c.fillRect(2, 2, 18, 18);
+        c.fillStyle = "#e7c996"; // lower inner edge
+        c.fillRect(3, 19, 16, 1);
+      },
+      true
+    );
+    // the bubble's pointer: its top three rows open the box's bottom border, then a stepped triangle with an outline
+    mk(
+      "bubble-tail",
+      12,
+      7,
+      (c) => {
+        const rows = [".OCCCCCCCCO.", ".OCCCCCCCCO.", ".OCCCCCCCCO.", "..OCCCCCCO..", "...OCCCCO...", "....OCCO....", ".....OO....."];
         rows.forEach((row, y) => {
-          for (let x = 0; x < row.length; x++) if (row[x] === "X") c.fillRect(ox + x * px, oy + y * px, px, px);
+          for (let x = 0; x < row.length; x++) {
+            if (row[x] === ".") continue;
+            c.fillStyle = row[x] === "O" ? "#2b180d" : "#fbeed6";
+            c.fillRect(x, y, 1, 1);
+          }
         });
-      });
+      },
+      true
+    );
+    // pixel glyph emotes that have no icon asset, drawn 1:1 (the plate is 22 px, the 64 px icons are shown at 16 px)
+    const glyph = (key: string, rows: string[], px: number, fg: string, size: number) => {
+      mk(
+        key,
+        size,
+        size,
+        (c) => {
+          c.fillStyle = fg;
+          const w = rows[0].length * px;
+          const h = rows.length * px;
+          const ox = Math.round((size - w) / 2);
+          const oy = Math.round((size - h) / 2);
+          rows.forEach((row, y) => {
+            for (let x = 0; x < row.length; x++) if (row[x] === "X") c.fillRect(ox + x * px, oy + y * px, px, px);
+          });
+        },
+        true
+      );
     };
-    glyph("emote-sleep", ["XXXXX......", "...X.......", "..X....XXX.", ".X......X..", "XXXXX..XXX."].map((r) => r.padEnd(11, ".")), 5, "#3452b0");
-    glyph("emote-alert", [".XX.", ".XX.", ".XX.", ".XX.", ".XX.", "....", ".XX."], 7, "#d1322a");
+    glyph("emote-sleep", ["XXXXX......", "...X.......", "..X....XXX.", ".X......X..", "XXXXX..XXX."].map((r) => r.padEnd(11, ".")), 2, "#3452b0", 22);
+    glyph("emote-alert", [".XX.", ".XX.", ".XX.", ".XX.", ".XX.", "....", ".XX."], 2, "#d1322a", 16);
   }
 
   // ───────────── overlays: day / night ─────────────
@@ -592,9 +682,10 @@ export class TownScene extends Phaser.Scene implements TownApi {
       if (its.length === 0) continue;
       const big = its.reduce((a, b) => (b.rect.w * b.rect.h > a.rect.w * a.rect.h ? b : a));
       const text = this.add
-        .text(0, 0, this.model.locations[id].label, { fontFamily: FONT, fontSize: "12px", fontStyle: "bold", color: "#fff3d0", stroke: "#2b1a0c", strokeThickness: 4 })
+        .text(0, 0, this.model.locations[id].label, { fontFamily: FONT, fontSize: "12px", color: "#fff3d0", stroke: INK, strokeThickness: 3 })
         .setOrigin(0.5, 1)
         .setResolution(this.labelRes)
+        .setShadow(0, 1, INK, 0, true, true)
         .setAlpha(0.92);
       this.uiLayer.add(text);
       this.placeLabels.push({ id, text, ax: big.rect.x + big.rect.w / 2, ay: big.rect.y + 2 });
@@ -695,17 +786,16 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const label = this.add
       .text(0, 0, isMe ? `★ ${a.name}` : a.name, {
         fontFamily: FONT,
-        fontSize: "14px",
-        fontStyle: "bold",
-        color: isMe ? "#f2c75c" : "#ffffff",
-        stroke: "#0b1020",
-        strokeThickness: 4
+        fontSize: "12px",
+        color: isMe ? "#ffd86a" : "#fff8e6",
+        stroke: INK,
+        strokeThickness: 3
       })
       .setOrigin(0.5, 1)
       .setResolution(this.labelRes);
-    label.setShadow(0, 1, "#000000", 2, true, true);
-    const emoteBg = this.add.image(0, -22, "emote-bg").setScale(0.78).setVisible(false);
-    const emoteIcon = this.add.image(0, -22, emoteTexture("think")).setDisplaySize(18, 18).setVisible(false);
+    label.setShadow(0, 1, INK, 0, true, true); // hard 1 px drop shadow under the outline: crisp, pixel-art style
+    const emoteBg = this.add.image(0, -22, "emote-bg").setVisible(false);
+    const emoteIcon = this.add.image(0, -22, emoteTexture("think")).setDisplaySize(16, 16).setVisible(false);
     top.add([label, emoteBg, emoteIcon]);
     this.uiLayer.add(top);
 
@@ -790,35 +880,17 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const fontPx = 12;
     const wrapped = wrapText(text, 168, fontPx, 4);
     const t = this.add
-      .text(0, 0, wrapped, {
-        fontFamily: FONT,
-        fontSize: `${fontPx}px`,
-        color: "#1b1f33",
-        lineSpacing: 3
-      })
+      .text(0, 0, wrapped, { fontFamily: FONT, fontSize: `${fontPx}px`, color: INK, lineSpacing: 4 })
       .setResolution(this.labelRes);
     const padX = 9;
     const padY = 7;
-    const w = Math.max(38, Math.ceil(t.width) + padX * 2);
+    const w = Math.max(40, Math.ceil(t.width) + padX * 2);
     const h = Math.ceil(t.height) + padY * 2;
-    const g = this.add.graphics();
-    g.fillStyle(0x000000, 0.28);
-    g.fillRoundedRect(-w / 2 + 2, -h + 3, w, h, 8);
-    g.fillStyle(0xfffbea, 1);
-    g.lineStyle(2, 0x2b3350, 1);
-    g.fillRoundedRect(-w / 2, -h, w, h, 8);
-    g.strokeRoundedRect(-w / 2, -h, w, h, 8);
-    g.fillTriangle(-6, -1.5, 6, -1.5, 0, 7);
-    g.lineStyle(2, 0x2b3350, 1);
-    g.beginPath();
-    g.moveTo(-6, -1);
-    g.lineTo(0, 7);
-    g.lineTo(6, -1);
-    g.strokePath();
-    g.fillStyle(0xfffbea, 1);
-    g.fillRect(-5, -3, 10, 3);
-    t.setPosition(-w / 2 + padX, -h + padY);
-    const box = this.add.container(0, 0, [g, t]);
+    // parchment box from the shared 9-slice frame (public/assets/ui/frame-paper-s.png) + a stepped pointer
+    const frame = this.add.nineslice(0, 0, KEYS.bubbleFrame, undefined, w, h, 4, 4, 4, 4).setOrigin(0.5, 1);
+    const tail = this.add.image(0, -3, "bubble-tail").setOrigin(0.5, 0);
+    t.setPosition(Math.round(-w / 2 + padX), Math.round(-h + padY));
+    const box = this.add.container(0, 0, [frame, tail, t]);
     box.setAlpha(0);
     res.top.add(box);
     res.bubble = { box, shownAt: performance.now() };
@@ -839,8 +911,10 @@ export class TownScene extends Phaser.Scene implements TownApi {
       } else {
         const tex = key === "sleep" || key === "alert" ? `emote-${key}` : emoteTexture(key);
         if (this.textures.exists(tex)) {
-          const px = key === "sleep" || key === "alert" ? 20 : 18;
-          res.emoteIcon.setTexture(tex).setVisible(true).setDisplaySize(px, px);
+          // glyph emotes are drawn 1:1; the 64 px icon art is shown at 16 px (a whole 1/4 scale)
+          res.emoteIcon.setTexture(tex).setVisible(true);
+          if (key === "sleep" || key === "alert") res.emoteIcon.setScale(1);
+          else res.emoteIcon.setDisplaySize(16, 16);
           res.emoteBg.setVisible(true);
         } else {
           res.emoteBg.setVisible(false);
@@ -1231,7 +1305,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const w = this.scale.width;
     const h = this.scale.height;
     if (w <= 0 || h <= 0) return;
-    this.safe = w < 700 ? { l: 0, r: 64, t: 130, b: 170 } : { l: 380, r: 84, t: 64, b: 104 };
+    this.safe = w < 900 ? { l: 0, r: 64, t: 130, b: 170 } : { l: 380, r: 84, t: 64, b: 104 };
     // the map must always cover the viewport: that is the smallest zoom
     const cover = Math.max(w / this.mapW, h / this.mapH);
     const wasDefault = !this.userZoomed;
@@ -1284,7 +1358,8 @@ export class TownScene extends Phaser.Scene implements TownApi {
   private applySafeBounds(): void {
     const cam = this.cameras.main;
     const z = cam.zoom || 1;
-    const { l, r, t, b } = this.safe;
+    // the title screen has no HUD: the camera stays inside the map
+    const { l, r, t, b } = this.titleMode ? { l: 0, r: 0, t: 0, b: 0 } : this.safe;
     cam.setBounds(-l / z, -t / z, this.mapW + (l + r) / z, this.mapH + (t + b) / z);
   }
 
@@ -1295,9 +1370,66 @@ export class TownScene extends Phaser.Scene implements TownApi {
     return { x: x - (l - r) / (2 * z), y: y - (t - b) / (2 * z) };
   }
 
+  /** waypoints of the title drift: the centre of the busiest places, in a loop */
+  private buildTitlePath(): void {
+    const order: LocationId[] = ["plaza", "hall", "market", "workshop", "plaza", "mediation", "archive", "gate"];
+    const pts: Pt[] = [];
+    for (const id of order) {
+      const loc = this.model.locations[id];
+      const tile = loc?.door ?? loc?.slots[0];
+      if (tile) pts.push(tileToWorld(tile));
+    }
+    this.titlePath = pts.length > 0 ? pts : [{ x: this.mapW / 2, y: this.mapH / 2 }];
+  }
+
+  /** put the camera on my Agent (or the plaza before there is one), as at the very first frame of a game */
+  private recenterOnPlayer(): void {
+    if (!this.ready) return;
+    const cam = this.cameras.main;
+    cam.setZoom(clamp(this.defaultZoom(), this.minZoom, MAX_ZOOM));
+    this.applySafeBounds();
+    const me = Array.from(this.residents.values()).find((r) => r.data.isPlayer);
+    const at = me ? { x: me.x, y: me.y - 8 } : (this.titlePath[0] ?? { x: this.mapW / 2, y: this.mapH / 2 });
+    const c = this.safeCenterFor(at.x, at.y);
+    this.setCenter(c.x, c.y);
+  }
+
+  private updateTitleDrift(dt: number): void {
+    const cam = this.cameras.main;
+    const goal = this.titlePath[this.titleTarget % this.titlePath.length];
+    const c = this.centerOf();
+    const dx = goal.x - c.x;
+    const dy = goal.y - c.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 14) this.titleTarget = (this.titleTarget + 1) % this.titlePath.length;
+    const speed = 12; // world px / s: a slow, calm drift
+    const k = 1 - Math.exp(-dt * 0.8); // turns are eased, never sharp
+    this.titleVel.x += ((d > 0 ? (dx / d) * speed : 0) - this.titleVel.x) * k;
+    this.titleVel.y += ((d > 0 ? (dy / d) * speed : 0) - this.titleVel.y) * k;
+    const zoom = clamp(this.defaultZoom(), this.minZoom, MAX_ZOOM);
+    cam.setZoom(lerp(cam.zoom, zoom, 1 - Math.exp(-dt * 3)));
+    this.setCenter(c.x + this.titleVel.x * dt, c.y + this.titleVel.y * dt);
+  }
+
   private updateCamera(dt: number): void {
     const cam = this.cameras.main;
     this.applySafeBounds();
+    if (this.titleMode) {
+      this.updateTitleDrift(dt);
+      return;
+    }
+    if (this.panVec.x !== 0 || this.panVec.y !== 0) {
+      // keyboard pan: ends follow, like dragging the map does
+      if (this.followId) {
+        this.followId = null;
+        EventBus.emit("follow-changed", null);
+      }
+      this.camAnim = null;
+      this.userZoomed = true;
+      const len = Math.hypot(this.panVec.x, this.panVec.y) || 1;
+      const sp = (340 * dt) / cam.zoom; // screen px / s -> world px
+      cam.setScroll(cam.scrollX + (this.panVec.x / len) * sp, cam.scrollY + (this.panVec.y / len) * sp);
+    }
     if (this.camAnim) {
       const an = this.camAnim;
       const res = this.residents.get(an.id);
@@ -1431,16 +1563,21 @@ export class TownScene extends Phaser.Scene implements TownApi {
   }
 
   private onWheel(pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number): void {
+    if (this.titleMode) return;
+    this.stepZoom(dy < 0 ? 1 : -1, pointer.x, pointer.y);
+  }
+
+  /** one notch / key press = one zoom step (1, 1.5, 2, 2.5, 3, 4), so the pixel art keeps a tidy scale */
+  private stepZoom(dir: 1 | -1, sx: number, sy: number): void {
     const cam = this.cameras.main;
     const base = this.zoomAnim ? this.zoomAnim.target : cam.zoom;
-    // one notch = one zoom step (1, 1.5, 2, 2.5, 3, 4), so the pixel art keeps a tidy scale
     const steps = Array.from(new Set([this.minZoom, ...ZOOM_STEPS.filter((z) => z > this.minZoom + 0.01 && z <= MAX_ZOOM)])).sort((a, b) => a - b);
     let idx = 0;
     for (let i = 0; i < steps.length; i++) if (Math.abs(steps[i] - base) < Math.abs(steps[idx] - base)) idx = i;
-    const next = clamp(idx + (dy < 0 ? 1 : -1), 0, steps.length - 1);
+    const next = clamp(idx + dir, 0, steps.length - 1);
     this.camAnim = null;
     this.userZoomed = true;
-    this.zoomAnim = { target: steps[next], sx: pointer.x, sy: pointer.y };
+    this.zoomAnim = { target: steps[next], sx, sy };
   }
 
   private hitResident(sx: number, sy: number): Resident | null {

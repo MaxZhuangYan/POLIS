@@ -1,4 +1,7 @@
 import type { Metadata, Viewport } from "next";
+// The game's pixel font (OFL, full Simplified Chinese, one woff2 ≈ 600 KB, loaded only when something uses it).
+// Imported ONCE here: the HUD uses it through `--font-pixel` (globals.css), Phaser waits for it in BootScene.
+import "@fontsource/fusion-pixel-12px-proportional-sc/400.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -9,7 +12,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#0b1020",
+  themeColor: "#2b180d",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

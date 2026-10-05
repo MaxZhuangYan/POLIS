@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { AgentView, JudgmentView, MomentView, NoteView, PostcardView, PrincipleView, WaveringView } from "@/lib/types";
-import { Btn, DomainTag, Icon, Portrait, PrincipleTablet, Spinner, TabletPlaceholder, useFocusTrap } from "./common";
+import { Btn, CloseGlyph, DomainTag, Figure, Icon, Portrait, PrincipleTablet, Spinner, TabletPlaceholder, useFocusTrap } from "./common";
 import { fmtClock, fmtCountdown } from "./time";
 import m from "./modals.module.css";
 
@@ -15,7 +15,8 @@ export function ModalFrame({
   children,
   footer,
   wide = false,
-  tone
+  tone,
+  logo = false
 }: {
   title: string;
   eyebrow?: ReactNode;
@@ -24,6 +25,8 @@ export function ModalFrame({
   footer?: ReactNode;
   wide?: boolean;
   tone?: "gold" | "paper";
+  /** set the title in the logo's pixel lettering (the arrival dialog) */
+  logo?: boolean;
 }) {
   const trap = useFocusTrap(true);
   return (
@@ -37,11 +40,11 @@ export function ModalFrame({
         <header className={m.head}>
           <div className={m.headText}>
             {eyebrow ? <div className={m.eyebrow}>{eyebrow}</div> : null}
-            <h2 className={m.title}>{title}</h2>
+            <h2 className={`${m.title} ${logo ? m.titleLogo : ""}`}>{title}</h2>
           </div>
           {onClose ? (
-            <button type="button" className={m.close} onClick={onClose} aria-label="关闭">
-              ✕
+            <button type="button" className={m.close} onClick={onClose} aria-label="关闭（Esc）">
+              <CloseGlyph />
             </button>
           ) : null}
         </header>
@@ -80,7 +83,7 @@ export function OnboardingModal({ busy, error, onCreate }: { busy: boolean; erro
     if (valid && !busy) onCreate({ name: name.trim(), sprite });
   };
   return (
-    <ModalFrame title="POLIS" eyebrow="欢迎来到一座小小的城邦" wide tone="gold">
+    <ModalFrame title="POLIS" eyebrow="欢迎来到一座小小的城邦" wide tone="gold" logo>
       <form onSubmit={submit} className={m.onboard}>
         <p className={m.premise}>
           你是 <b>守护灵</b>：没有身体，只能在它拿不定主意的时候，低语一句。
@@ -108,14 +111,14 @@ export function OnboardingModal({ busy, error, onCreate }: { busy: boolean; erro
           {LOOKS.map((l) => (
             <label key={l.key} className={`${m.look} ${sprite === l.key ? m.lookOn : ""}`}>
               <input type="radio" name="look" value={l.key} checked={sprite === l.key} onChange={() => setSprite(l.key)} />
-              <Portrait sprite={l.key} size={72} player={sprite === l.key} />
+              <Figure sprite={l.key} scale={4} />
               <strong>{l.name}</strong>
               <small>{l.note}</small>
             </label>
           ))}
         </fieldset>
         <ErrorLine error={error} />
-        <Btn type="submit" variant="primary" full busy={busy} disabled={!valid}>
+        <Btn type="submit" variant="primary" full busy={busy} disabled={!valid} sfx="confirm">
           让它入城
         </Btn>
       </form>
@@ -174,7 +177,7 @@ export function ForkModal({
       <div className={m.speakers}>
         {speaker ? (
           <figure>
-            <Portrait sprite={speaker.sprite} size={64} />
+            <Portrait sprite={speaker.sprite} size={96} />
             <figcaption>
               {speaker.name}
               <small>{speaker.role}</small>
@@ -182,7 +185,7 @@ export function ForkModal({
           </figure>
         ) : null}
         <figure>
-          <Portrait sprite={me.sprite} size={64} player />
+          <Portrait sprite={me.sprite} size={96} player />
           <figcaption>
             {me.name}
             <small>你的 Agent</small>
@@ -206,18 +209,22 @@ export function ForkModal({
         </p>
       ) : null}
       <div className={m.options}>
-        {moment.options.map((o) => (
+        {moment.options.map((o, i) => (
           <button
             key={o.id}
             type="button"
             className={m.option}
             disabled={busy}
+            data-sfx="confirm"
             onClick={() => {
               setPicked(o.id);
               onChoose(o.id);
             }}
           >
             {busy && picked === o.id ? <Spinner size={16} /> : null}
+            <kbd className={m.optionKey} aria-hidden>
+              {i + 1}
+            </kbd>
             <span>{o.label}</span>
           </button>
         ))}
@@ -229,7 +236,7 @@ export function ForkModal({
           <>
             {"　"}
             <button type="button" className={m.link} onClick={onLater}>
-              稍后再说
+              稍后再说（Esc）
             </button>
           </>
         ) : null}
@@ -283,7 +290,7 @@ export function ImprintModal({
         </p>
       ) : null}
       <ErrorLine error={error} />
-      <Btn variant="primary" full busy={busy} disabled={!ready} onClick={onAck} autoFocus>
+      <Btn variant="primary" full busy={busy} disabled={!ready} onClick={onAck} autoFocus sfx="confirm">
         看它出发
       </Btn>
     </ModalFrame>
@@ -326,7 +333,7 @@ export function JudgmentModal({
   return (
     <ModalFrame title="它的回应" eyebrow={<span className={`${m.decision} ${m[d.cls]}`}>{d.label}</span>} onClose={onClose} wide>
       <div className={m.judgeTop}>
-        <Portrait sprite={me.sprite} size={64} player />
+        <Portrait sprite={me.sprite} size={48} player />
         <div>
           <p className={m.lead}>{d.lead}</p>
           <p className={m.chosen}>
@@ -362,24 +369,24 @@ export function JudgmentModal({
       <div className={m.actions}>
         {j.decision === "refuse" ? (
           <>
-            <Btn variant="primary" busy={busy && which === "accept"} disabled={busy} onClick={() => go("accept")} autoFocus>
+            <Btn variant="primary" busy={busy && which === "accept"} disabled={busy} onClick={() => go("accept")} autoFocus sfx="confirm">
               尊重它的判断
             </Btn>
-            <Btn variant="danger" busy={busy && which === "force"} disabled={busy || !j.canForce} onClick={() => go("force")} title={forceReason ?? undefined}>
+            <Btn variant="danger" busy={busy && which === "force"} disabled={busy || !j.canForce} onClick={() => go("force")} title={forceReason ?? undefined} sfx="confirm">
               强制执行（{j.forceCost} Scrip · 信任 −10）
             </Btn>
           </>
         ) : j.decision === "adjust" ? (
           <>
-            <Btn variant="primary" busy={busy && which === "adopt"} disabled={busy} onClick={() => go("adopt")} autoFocus>
+            <Btn variant="primary" busy={busy && which === "adopt"} disabled={busy} onClick={() => go("adopt")} autoFocus sfx="confirm">
               采纳它的调整
             </Btn>
-            <Btn busy={busy && which === "overrule"} disabled={busy} onClick={() => go("overrule")}>
+            <Btn busy={busy && which === "overrule"} disabled={busy} onClick={() => go("overrule")} sfx="confirm">
               坚持原来的选择
             </Btn>
           </>
         ) : (
-          <Btn variant="primary" busy={busy && which === "accept"} disabled={busy} onClick={() => go("accept")} autoFocus>
+          <Btn variant="primary" busy={busy && which === "accept"} disabled={busy} onClick={() => go("accept")} autoFocus sfx="confirm">
             好，去吧
           </Btn>
         )}
@@ -418,7 +425,7 @@ export function WaveringModal({
   return (
     <ModalFrame title={`和 ${challenger} 聊过之后，它来找你`} eyebrow="质问" onClose={onClose} wide>
       <div className={m.judgeTop}>
-        <Portrait sprite={me.sprite} size={64} player />
+        <Portrait sprite={me.sprite} size={48} player />
         <p className={m.lead}>它对自己的一条原则，有点动摇了。</p>
       </div>
       <div className={m.cite}>
@@ -454,6 +461,7 @@ export function WaveringModal({
                 onResolve("reaffirm");
               }}
               autoFocus
+              sfx="confirm"
             >
               重申：它没错
             </Btn>
@@ -471,6 +479,7 @@ export function WaveringModal({
                 setWhich("revise");
                 onResolve("revise", text.trim());
               }}
+              sfx="confirm"
             >
               确认修订
             </Btn>
@@ -532,7 +541,7 @@ export function NoteModal({
         </label>
         <p className={m.hint}>它不会秒回。它会在自己的时间——下一张明信片里——回应你。</p>
         <ErrorLine error={error} />
-        <Btn type="submit" variant="primary" full busy={busy} disabled={!can}>
+        <Btn type="submit" variant="primary" full busy={busy} disabled={!can} sfx="confirm">
           留下这句话
         </Btn>
       </form>

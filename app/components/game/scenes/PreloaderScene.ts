@@ -1,14 +1,16 @@
-// PreloaderScene: loads EVERYTHING listed in the asset pack (tileset, tilemap, character sheets, facesets, emote
-// icons) with load.pack(), draws a pixel-style progress bar with the percentage and the file in flight, defines the
-// character animations once from data, and then starts the town.
+// PreloaderScene: loads the blocking sections of the asset pack (tileset, tilemap, character sheets, facesets, emote
+// icons, HUD frames) with load.pack(), draws a pixel-style progress bar with the percentage and the file in flight
+// (the React loading screen shows the same percentage from the `load-progress` event), defines the character
+// animations once from data, launches the background AudioScene and starts the town.
+//
+// The audio sections of the pack are NOT loaded here: decoding three 70 s music loops must never delay the town.
 
 import * as Phaser from "phaser";
 import { EventBus } from "../EventBus";
-import { BG_COLOR, KEYS, SCENES } from "../keys";
+import { BG_COLOR, BLOCKING_PACK_SECTIONS, KEYS, PIXEL_FONT, SCENES } from "../keys";
 import { createCharacterAnims } from "../anims";
 import { BAR_H, BAR_W } from "./BootScene";
 
-const FONT = '"PingFang SC","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei",monospace';
 const SEG = 4; // fill granularity: one bar tile = 4 px
 
 export class PreloaderScene extends Phaser.Scene {
@@ -38,13 +40,19 @@ export class PreloaderScene extends Phaser.Scene {
       EventBus.emit("load-progress", this.load.progress, file.key);
     });
 
-    // the manifest was fetched by BootScene; load.pack accepts the ready-made object
-    this.load.pack({ key: KEYS.pack, url: this.cache.json.get(KEYS.manifest) });
+    // the manifest was fetched by BootScene; load.pack accepts the ready-made object. Only the blocking sections.
+    const manifest = this.cache.json.get(KEYS.manifest) as object;
+    for (const section of BLOCKING_PACK_SECTIONS) {
+      this.load.pack({ key: `${KEYS.pack}-${section}`, url: manifest, dataKey: section });
+    }
   }
 
   create(): void {
     this.setProgress(1);
+    EventBus.emit("load-progress", 1, "");
     createCharacterAnims(this.anims);
+    // audio loads (and may fail) on its own, in the background
+    if (!this.scene.get(SCENES.audio)?.scene.isActive()) this.scene.launch(SCENES.audio);
     this.scene.start(SCENES.town);
   }
 
@@ -54,11 +62,12 @@ export class PreloaderScene extends Phaser.Scene {
     this.frame = this.add.image(0, 0, KEYS.barFrame).setOrigin(0.5, 0.5);
     const segs = BAR_W / SEG;
     for (let i = 0; i < segs; i++) this.fills.push(this.add.image(0, 0, KEYS.barFill).setOrigin(0, 0).setVisible(false));
+    // pixel font at 36 / 12 px: whole multiples of its 12 px grid
     this.title = this.add
-      .text(0, 0, "POLIS", { fontFamily: FONT, fontSize: "20px", color: "#f2c75c", fontStyle: "bold", stroke: "#0b1020", strokeThickness: 4 })
+      .text(0, 0, "POLIS", { fontFamily: PIXEL_FONT, fontSize: "36px", color: "#f2c75c", stroke: "#2b180d", strokeThickness: 6 })
       .setOrigin(0.5, 1);
-    this.pct = this.add.text(0, 0, "0%", { fontFamily: FONT, fontSize: "14px", color: "#ffe9b0" }).setOrigin(0.5, 0);
-    this.file = this.add.text(0, 0, "", { fontFamily: FONT, fontSize: "11px", color: "#8895ba" }).setOrigin(0.5, 0);
+    this.pct = this.add.text(0, 0, "0%", { fontFamily: PIXEL_FONT, fontSize: "12px", color: "#fbeed6" }).setOrigin(0.5, 0);
+    this.file = this.add.text(0, 0, "", { fontFamily: PIXEL_FONT, fontSize: "12px", color: "#b89a6a" }).setOrigin(0.5, 0);
     this.layout();
   }
 
@@ -75,8 +84,8 @@ export class PreloaderScene extends Phaser.Scene {
     const left = cx - (BAR_W / 2) * s;
     this.fills.forEach((img, i) => img.setPosition(left + i * SEG * s, cy - (BAR_H / 2) * s).setScale(s));
     this.title.setPosition(cx, cy - (BAR_H / 2 + 8) * s);
-    this.pct.setPosition(cx, cy + (BAR_H / 2 + 6) * s);
-    this.file.setPosition(cx, cy + (BAR_H / 2 + 6) * s + 22);
+    this.pct.setPosition(cx, cy + (BAR_H / 2 + 8) * s);
+    this.file.setPosition(cx, cy + (BAR_H / 2 + 8) * s + 22);
   }
 
   private setProgress(v: number): void {
