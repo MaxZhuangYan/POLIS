@@ -74,7 +74,7 @@ export function TestPanel({ busy, onAdvance }: { busy: boolean; onAdvance: GameA
   const [open, setOpen] = useState(true);
   useEffect(() => {
     try {
-      if (window.matchMedia("(max-width: 760px)").matches) setOpen(false);
+      if (window.matchMedia("(max-width: 900px)").matches) setOpen(false);
     } catch {
       /* ignore */
     }

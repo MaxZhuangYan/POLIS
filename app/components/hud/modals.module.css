@@ -714,7 +714,7 @@
 }
 
 /* ───────────── phone: bottom sheets ───────────── */
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .backdrop {
     align-items: flex-end;
     padding: 0;
@@ -722,6 +722,7 @@
   .modal,
   .wide {
     width: 100%;
+    max-width: 680px;
     max-height: 94dvh;
   }
   .paper {

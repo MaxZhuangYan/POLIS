@@ -1305,7 +1305,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const w = this.scale.width;
     const h = this.scale.height;
     if (w <= 0 || h <= 0) return;
-    this.safe = w < 700 ? { l: 0, r: 64, t: 130, b: 170 } : { l: 380, r: 84, t: 64, b: 104 };
+    this.safe = w < 900 ? { l: 0, r: 64, t: 130, b: 170 } : { l: 380, r: 84, t: 64, b: 104 };
     // the map must always cover the viewport: that is the smallest zoom
     const cover = Math.max(w / this.mapW, h / this.mapH);
     const wasDefault = !this.userZoomed;

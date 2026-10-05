@@ -115,7 +115,7 @@ function fmtAway(ms: number): string {
 function useIsPhone(): boolean {
   const [phone, setPhone] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 760px)");
+    const mq = window.matchMedia("(max-width: 900px)");
     const update = () => setPhone(mq.matches);
     update();
     mq.addEventListener("change", update);

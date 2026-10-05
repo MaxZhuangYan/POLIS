@@ -658,7 +658,8 @@
   display: grid;
   grid-template-columns: 38px 16px 1fr;
   gap: 6px;
-  align-items: start;
+  align-items: center;
+  min-height: 32px;
   padding: 3px 6px;
   margin-bottom: 2px;
   border: none;
@@ -683,10 +684,9 @@
 .feedStrong {
   text-shadow: 1px 0 0 currentColor;
 }
-@media (pointer: coarse), (max-width: 760px) {
+@media (pointer: coarse), (max-width: 900px) {
   .feedItem {
     min-height: 40px;
-    align-items: center;
   }
 }
 .feedClock {
@@ -1280,7 +1280,7 @@
 }
 .testHead {
   width: 100%;
-  min-height: 32px;
+  min-height: 40px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1629,11 +1629,12 @@
   display: none;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .leftCol {
     left: 4px;
     top: var(--top, 8px);
     width: calc(100% - 136px);
+    max-width: 440px;
     max-height: calc(100% - var(--top, 8px) - 150px);
     gap: 4px;
   }
@@ -1780,6 +1781,12 @@
   }
   .feedbackBtns .btn {
     padding: 0;
+  }
+}
+/* short phone / tablet screens: the rail would run into the locate button, so it steps left of the rail */
+@media (max-width: 900px) and (max-height: 700px) {
+  .locate {
+    right: 72px;
   }
 }
 @keyframes sheetIn {
