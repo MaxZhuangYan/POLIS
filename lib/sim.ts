@@ -544,8 +544,16 @@ function isFree(id: string): boolean {
 function proposeCoop(proposer: string, task: TaskRow): boolean {
   const tpl = TEMPLATE_BY_ID[task.template_id ?? ""];
   if (!tpl) return false;
+  // nobody asks the same person again the day they said no
+  const refusedBy = new Set(
+    (
+      getDb()
+        .prepare("SELECT json_extract(refs_json, '$.other') other FROM memories WHERE agent_id = ? AND kind = 'refused' AND at_ms > ?")
+        .all(proposer, simNow() - 24 * HOUR_MS) as Array<{ other: string | null }>
+    ).map((r) => r.other),
+  );
   const candidates = agents()
-    .filter((x) => x.id !== proposer && isFree(x.id))
+    .filter((x) => x.id !== proposer && isFree(x.id) && !refusedBy.has(x.id))
     .map((x) => {
       const rel = getRelationship(proposer, x.id);
       const grudge = openIncidents(proposer, x.id).length;
