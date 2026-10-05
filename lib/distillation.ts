@@ -379,6 +379,8 @@ const PENDING_SQL = `
   WHERE status = 'decided'
     AND player_choice IS NOT NULL
     AND distilled_into IS NULL
+    -- a choice the Agent pushed back on (refuse / adjust) never becomes its principle, however it was resolved
+    AND (judgment_id IS NULL OR judgment_id IN (SELECT id FROM judgments WHERE decision = 'execute'))
     AND id NOT IN (SELECT source_decision_id FROM principles WHERE source IN ('llm','fallback'))
 `;
 

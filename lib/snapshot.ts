@@ -12,6 +12,7 @@ import { llmStatusLabel } from "./llm";
 import { parseOptions, type MomentRow } from "./decisionMoments";
 import type { JudgmentRow } from "./autonomy";
 import type {
+  MemoryTag,
   ActivityKind,
   AgentView,
   Emote,
@@ -161,6 +162,32 @@ function townRelations(): TownRelationView[] {
   return [...out.values()];
 }
 
+const MEMORY_TAG: Record<string, MemoryTag> = {
+  guidance: "你的话",
+  note_received: "你的话",
+  survey: "你的话",
+  principle: "它认同",
+  judgment: "它认同",
+  respected: "它没认同",
+  adopted: "它没认同",
+  overruled: "它没认同",
+  forced: "被迫",
+  consequence: "后来",
+  grudge: "后来",
+  betrayed: "后来",
+  visit: "后来",
+  title: "后来",
+  principle_dormant: "后来",
+  principle_woken: "后来",
+  wavering: "后来",
+  proposed: "别人",
+  refused_other: "别人",
+};
+
+function memoryTag(kind: string): MemoryTag {
+  return MEMORY_TAG[kind] ?? "它做了";
+}
+
 export function buildSnapshot(): GameSnapshot {
   const db = getDb();
   const now = simNow();
@@ -293,7 +320,7 @@ export function buildSnapshot(): GameSnapshot {
       kind: string;
       text: string;
     }>
-  ).map((m) => ({ id: m.id, atMs: m.at_ms, clock: clockLabel(m.at_ms, tz), text: m.text, kind: m.kind }));
+  ).map((m) => ({ id: m.id, atMs: m.at_ms, clock: clockLabel(m.at_ms, tz), text: m.text, kind: m.kind, tag: memoryTag(m.kind) }));
 
   const doneCount = (db.prepare("SELECT COUNT(*) n FROM tasks WHERE (taken_by = ? OR partner_id = ?) AND status = 'done'").get(pid, pid) as { n: number }).n;
 

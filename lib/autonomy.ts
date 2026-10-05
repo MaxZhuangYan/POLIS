@@ -371,7 +371,10 @@ export async function chooseOption(momentId: number, optionId: string): Promise<
     });
     metric(verdict.decision === "refuse" ? "deviation_refuse" : "deviation_adjust", { judgmentId, source: verdict.source });
   }
-  void distillMomentNow(momentId);
+  // Only a choice the Agent agrees with and carries out becomes one of its principles. A suggestion it pushed back on
+  // stays an exchange between the two of them (memories), whatever the guardian does next — respect, force, adopt
+  // the compromise or insist (see resolveJudgment).
+  if (verdict.decision === "execute") void distillMomentNow(momentId);
   return { moment: getMoment(momentId)!, judgment: getJudgment(judgmentId) };
 }
 
@@ -423,7 +426,7 @@ export function resolveJudgment(id: number, action: "accept" | "force" | "adopt"
        VALUES (?, ?, 'trust', 1.0, ?, 'forced', NULL, ?, ?, ?, 0)`,
     ).run(agentId, text, moment.id, now, now, `强制执行：${chosen.label}`);
     applyEffect(agentId, moment, chosen.effect, { reason: "你强制我这么做" });
-    remember(agentId, "forced", `你花了一张指令券，强迫我「${chosen.label}」。我照做了。`, { judgmentId: id });
+    remember(agentId, "forced", `我不同意「${chosen.label}」，你花了一张指令券强迫我照做。我做了，但这不是我的想法。`, { judgmentId: id });
     say(agentId, "……好。照你说的。", "upset");
     logEvent({ kind: "trust", text: `你强制 ${agentName(agentId)}「${chosen.label}」：信任 ${applied}，花费 ${FORCE_TICKET_COST} Scrip`, actors: [agentId], importance: 3 });
     metric("force_execute", { judgmentId: id });
@@ -433,7 +436,7 @@ export function resolveJudgment(id: number, action: "accept" | "force" | "adopt"
     if (alt) applyEffect(agentId, moment, alt, { reason: principle ? `按『${principle.text}』，是我自己的决定` : null, principleId: principle?.id ?? null });
     const applied = changeTrust(agentId, 1, "你尊重了它的判断");
     const altLabel = options.find((o) => o.id === j.alt_option)?.label ?? "按自己的判断";
-    remember(agentId, "respected", `我说了不，你尊重了。我选了「${altLabel}」。`, { judgmentId: id }, principle?.id ?? null);
+    remember(agentId, "respected", `你建议「${chosen.label}」，我说了不，你尊重了。我选了「${altLabel}」。`, { judgmentId: id }, principle?.id ?? null);
     say(agentId, "谢谢你……让我自己决定。", "happy");
     logEvent({ kind: "trust", text: `你尊重了 ${agentName(agentId)} 的判断${applied > 0 ? `（信任 +${applied}）` : ""}`, actors: [agentId], importance: 2 });
     finish("accepted", j.alt_option);
@@ -441,7 +444,7 @@ export function resolveJudgment(id: number, action: "accept" | "force" | "adopt"
     const alt = effectFor(moment, "ADJUST");
     if (alt) applyEffect(agentId, moment, alt, { judgmentId: id, reason: principle ? `折中了你的建议和『${principle.text}』` : "折中了你的建议", principleId: principle?.id ?? null });
     const applied = changeTrust(agentId, 2, "采纳了它的调整");
-    remember(agentId, "adopted", `你采纳了我的折中：${parseContext(moment).adjust?.label ?? ""}。`, { judgmentId: id });
+    remember(agentId, "adopted", `你建议「${chosen.label}」，我提了折中：${parseContext(moment).adjust?.label ?? ""}。你采纳了。`, { judgmentId: id });
     say(agentId, "好，就这么办。", "happy");
     logEvent({ kind: "trust", text: `你采纳了 ${agentName(agentId)} 的调整${applied > 0 ? `（信任 +${applied}）` : ""}`, actors: [agentId], importance: 2 });
     finish("adopted", "ADJUST");
