@@ -268,6 +268,10 @@ export class TownScene extends Phaser.Scene implements TownApi {
   private labelRes = 2;
   // camera
   private minZoom = 0.5;
+  /** screen px covered by HUD on each side; the camera may scroll that far past
+   *  the map edge so a resident near the edge can be brought into view, and
+   *  follow/focus centre the target in the uncovered area */
+  private safe = { l: 0, r: 0, t: 0, b: 0 };
   private userZoomed = false;
   private zoomAnim: { target: number; sx: number; sy: number } | null = null;
   private camAnim: { t: number; dur: number; id: string; zoomTo: number; fromX: number; fromY: number; fromZ: number } | null = null;
@@ -1047,6 +1051,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const w = this.scale.width;
     const h = this.scale.height;
     if (w <= 0 || h <= 0) return;
+    this.safe = w < 700 ? { l: 0, r: 64, t: 130, b: 170 } : { l: 380, r: 84, t: 64, b: 104 };
     const cover = Math.max(w / MAP_W, h / MAP_H);
     const wasCover = !this.userZoomed || Math.abs(cam.zoom - this.minZoom) < 0.001;
     this.minZoom = cover;
@@ -1095,8 +1100,23 @@ export class TownScene extends Phaser.Scene implements TownApi {
     this.userZoomed = true;
   }
 
+  private applySafeBounds(): void {
+    const cam = this.cameras.main;
+    const z = cam.zoom || 1;
+    const { l, r, t, b } = this.safe;
+    cam.setBounds(-l / z, -t / z, MAP_W + (l + r) / z, MAP_H + (t + b) / z);
+  }
+
+  /** world point that puts (x, y) in the middle of the HUD-free area */
+  private safeCenterFor(x: number, y: number): Pt {
+    const z = this.cameras.main.zoom || 1;
+    const { l, r, t, b } = this.safe;
+    return { x: x - (l - r) / (2 * z), y: y - (t - b) / (2 * z) };
+  }
+
   private updateCamera(dt: number): void {
     const cam = this.cameras.main;
+    this.applySafeBounds();
     if (this.camAnim) {
       const an = this.camAnim;
       const res = this.residents.get(an.id);
@@ -1108,7 +1128,8 @@ export class TownScene extends Phaser.Scene implements TownApi {
         const e = 1 - Math.pow(1 - k, 3);
         const z = lerp(an.fromZ, an.zoomTo, e);
         cam.setZoom(z);
-        this.setCenter(lerp(an.fromX, res.x, e), lerp(an.fromY, res.y - 18, e));
+        const goal = this.safeCenterFor(res.x, res.y - 18);
+        this.setCenter(lerp(an.fromX, goal.x, e), lerp(an.fromY, goal.y, e));
         if (k >= 1) this.camAnim = null;
       }
       return;
@@ -1128,7 +1149,8 @@ export class TownScene extends Phaser.Scene implements TownApi {
       if (res) {
         const c = this.centerOf();
         const k = 1 - Math.exp(-dt * 4.5);
-        this.setCenter(lerp(c.x, res.x, k), lerp(c.y, res.y - 18, k));
+        const goal = this.safeCenterFor(res.x, res.y - 18);
+        this.setCenter(lerp(c.x, goal.x, k), lerp(c.y, goal.y, k));
       }
     }
   }

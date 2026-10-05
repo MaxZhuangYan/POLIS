@@ -134,6 +134,11 @@ export default function GameShell({ snapshot, actions, busy, error, connection =
   }, [me]);
 
   const pickFeed = useCallback((item: FeedItem) => {
+    // A postcard line opens the postcard itself; everything else focuses the town.
+    if (item.kind === "postcard") {
+      setUserModal("postcards");
+      return;
+    }
     const id = item.actors[0];
     if (!id) return;
     setFollowId(null);
