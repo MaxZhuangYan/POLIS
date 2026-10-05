@@ -295,6 +295,8 @@ function createDb(): Database.Database {
     ["context_json", "TEXT NOT NULL DEFAULT '{}'"],
     ["judgment_id", "INTEGER"],
     ["decided_ms", "INTEGER"],
+    // set when the choice deepened an existing principle instead of forming a new one
+    ["distilled_into", "INTEGER"],
   ]);
 
   addColumns(db, "principles", [

@@ -264,6 +264,50 @@ function originFor(row: DecidedMomentRow, option: MomentOption): string {
   return `${scene} —— 你选了「${option.label}」`;
 }
 
+function bigrams(text: string): Set<string> {
+  const chars = Array.from(text.replace(/[\s，。、；：！？『』「」,.;:!?]/g, ""));
+  const out = new Set<string>();
+  for (let i = 0; i + 1 < chars.length; i++) out.add(chars[i] + chars[i + 1]);
+  return out;
+}
+
+/** share of character pairs the two sentences have in common (Jaccard over bigrams) */
+export function textOverlap(a: string, b: string): number {
+  const x = bigrams(a);
+  const y = bigrams(b);
+  if (x.size === 0 || y.size === 0) return a === b ? 1 : 0;
+  let common = 0;
+  for (const g of x) if (y.has(g)) common++;
+  return common / (x.size + y.size - common);
+}
+
+/** An existing imprint that says the same thing: same domain and the same full stance, and either a template
+ *  sentence (offline, the option's stance IS its meaning) or a near-identical wording. A revision (|dir| < 1),
+ *  a forced principle or a core value is never merged into. */
+function findTwin(
+  db: Database.Database,
+  agentId: string,
+  text: string,
+  domain: PrincipleDomain,
+  stanceDir: number,
+  source: PrincipleSource,
+): { id: number; text: string } | null {
+  if (Math.abs(stanceDir) !== 1) return null;
+  const rows = db
+    .prepare(
+      `SELECT id, text, source FROM principles
+       WHERE agent_id = ? AND domain = ? AND stance_dir = ? AND source IN ('llm', 'fallback', 'note')
+       ORDER BY weight DESC, id ASC`,
+    )
+    .all(agentId, domain, stanceDir) as Array<{ id: number; text: string; source: string }>;
+  for (const r of rows) {
+    if (r.text === text) return r;
+    if (source === "fallback" && r.source === "fallback") return r;
+    if (textOverlap(r.text, text) >= 0.5) return r;
+  }
+  return null;
+}
+
 async function distillOne(db: Database.Database, row: DecidedMomentRow): Promise<void> {
   let options: MomentOption[];
   try {
@@ -298,6 +342,28 @@ async function distillOne(db: Database.Database, row: DecidedMomentRow): Promise
   const stanceDir = option.stance?.dir ?? 0;
 
   const now = simNow();
+  const twin = findTwin(db, row.agent_id, text, domain, stanceDir, source);
+  if (twin) {
+    // The same stance again: it deepens the imprint it already has instead of piling up a near-copy
+    // (offline, every "decline" in one domain distils to the same template sentence).
+    const done = db.transaction(() => {
+      const claimed = db.prepare("UPDATE decision_moments SET distilled_into = ? WHERE id = ? AND distilled_into IS NULL").run(twin.id, row.id);
+      if (claimed.changes === 0) return false;
+      db.prepare("UPDATE principles SET weight = MIN(1.0, weight + 0.25), last_cited_at = ?, last_decayed_at = ? WHERE id = ?").run(now, now, twin.id);
+      return true;
+    })();
+    if (!done) return;
+    metric("distillation", { decisionId: row.id, source, llmReachable: useLlm, reinforced: twin.id });
+    remember(row.agent_id, "principle", `你又一次这样选了。『${twin.text}』，我记得更牢了。`, { decisionId: row.id }, twin.id);
+    logEvent({
+      kind: "principle",
+      text: `烙印『${twin.text}』又深了一层`,
+      actors: [row.agent_id],
+      importance: 2,
+      data: { principleId: twin.id, source, reinforced: true },
+    });
+    return;
+  }
   try {
     const res = db
       .prepare(
@@ -336,6 +402,7 @@ const PENDING_SQL = `
   FROM decision_moments
   WHERE status = 'decided'
     AND player_choice IS NOT NULL
+    AND distilled_into IS NULL
     AND id NOT IN (SELECT source_decision_id FROM principles WHERE source IN ('llm','fallback'))
 `;
 

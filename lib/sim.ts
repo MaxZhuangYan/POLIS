@@ -626,13 +626,23 @@ function playerAnswersProposal(agentId: string, proposer: string, tpl: TaskTempl
       remember(proposer, "proposed", `向 ${agentName(agentId)} 提议合作「${tpl.name}」，TA 说要想想。`, { tpl: tpl.id });
       return { accept: false, escalated: true, reason: null, principle: null };
     }
-    // Cannot ask today: decides itself by disposition.
+    // Cannot ask today: decides itself from what it knows about the proposer (a grudge, the public record,
+    // work done together), and only falls back on its disposition when it knows nothing.
     const t = traitsOf(agentId);
-    const ok = t.trust >= 0.5 && !grudge;
+    const ok = !grudge && (defaults === 0 || rel.coop_done >= 1 || t.trust >= 0.5);
+    const because = grudge
+      ? `TA 上次${grudge.text}`
+      : defaults === 0
+        ? "TA 档案上没有违约"
+        : rel.coop_done >= 1
+          ? `TA 档案上有违约，可我们一起做成过 ${rel.coop_done} 单`
+          : ok
+            ? "我还是愿意给人机会"
+            : `TA 档案上有 ${defaults} 次违约，我对 TA 还没底`;
     remember(
       agentId,
       "self_decided",
-      `${agentName(proposer)} 提议合作「${tpl.name}」。这回我没等你，自己拿了主意：${ok ? "答应了——我还是愿意给人机会" : `婉拒了——我对 ${agentName(proposer)} 还没底`}。`,
+      `${agentName(proposer)} 提议合作「${tpl.name}」。这回我没等你，自己拿了主意：${ok ? "答应了" : "婉拒了"}——${because}。`,
       { proposer },
     );
     return { accept: ok, why: ok ? undefined : "这次先不了。", reason: "今天我自己拿了个主意", principle: null };

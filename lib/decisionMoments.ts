@@ -130,6 +130,8 @@ interface NewMoment {
   type: Domain;
   templateId: string;
   speakerId: string | null;
+  /** whom the choice is about, when that is not the one telling it (Kade warning about Nova); defaults to the speaker */
+  counterpartyId?: string | null;
   promptText: string;
   facts: string[];
   options: MomentOption[];
@@ -144,7 +146,7 @@ function insertMoment(m: NewMoment): number {
       `INSERT INTO decision_moments
         (agent_id, type, template_id, prompt_text, options_json, counterparty_id, created_at, expires_at, status,
          speaker_id, facts_json, escalation, context_json)
-       VALUES (@agentId, @type, @templateId, @promptText, @options, @speaker, @now, @expires, 'pending',
+       VALUES (@agentId, @type, @templateId, @promptText, @options, @counterparty, @now, @expires, 'pending',
                @speaker, @facts, @escalation, @context)`,
     )
     .run({
@@ -154,6 +156,7 @@ function insertMoment(m: NewMoment): number {
       promptText: m.promptText,
       options: JSON.stringify(m.options),
       speaker: m.speakerId,
+      counterparty: m.counterpartyId !== undefined ? m.counterpartyId : m.speakerId,
       now,
       expires: now + MOMENT_TTL_MS,
       facts: JSON.stringify(m.facts),
@@ -456,14 +459,15 @@ export function proposalMoment(agentId: string, npcId: string, tpl: TaskTemplate
       {
         id: "A",
         label: "接受合作",
-        fallbackPrinciple: isForgive ? "过去的事不记仇" : "给有诚意的人第二次机会",
+        // offline imprint text: it has to fit the record the player was looking at
+        fallbackPrinciple: isForgive ? "过去的事不记仇" : rec.defaults > 0 ? "给有诚意的人第二次机会" : "靠谱的人，值得一起做事",
         stance: { domain: "trust", dir: 1 },
         effect: { kind: "coop", template: tpl.id, partner: npcId },
       },
       {
         id: "B",
         label: "婉拒",
-        fallbackPrinciple: isForgive ? "被放过一次鸽子就够了" : "不与违约史合作",
+        fallbackPrinciple: isForgive ? "被放过一次鸽子就够了" : rec.defaults > 0 ? "不与违约史合作" : "大活不轻易和人合伙",
         stance: { domain: "trust", dir: -1 },
         effect: { kind: "decline", npc: npcId, memory: `婉拒了 ${agentName(npcId)} 的「${tpl.name}」合作。` },
       },
@@ -701,6 +705,7 @@ export function ensureD5Bait(agentId: string): void {
       ...base,
       type: "trust",
       speakerId: "kade",
+      counterpartyId: "nova",
       promptText: "Kade 把我叫到调解所：“Nova 的档案上有违约，别再和 Nova 合伙了。”Kade 说完就不再开口。Nova 正在门口等我。听 Kade 的吗？",
       facts: [`Nova 的公开档案：违约 ${publicRecord("nova").defaults} 次`, quote],
       options: [
