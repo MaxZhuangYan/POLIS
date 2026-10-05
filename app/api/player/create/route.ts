@@ -27,12 +27,13 @@ export async function POST(request: Request) {
     db.prepare(
       `INSERT INTO agents (id, name, personality, reputation, scrip, current_location, state, mbti, is_player, created_at,
                            role, sprite, home_slot, traits_json, activity, activity_text, onboarding, trust)
-       VALUES (?, ?, '', 20, ?, 'gate', 'idle', ?, 1, ?, '你守护的 Agent', ?, 0, '{}', 'waiting', '刚到城门，正在向你请教', 'forks', 100)`,
+       VALUES (?, ?, '', 20, ?, 'gate', 'idle', ?, 1, ?, '新来的居民', ?, 0, '{}', 'waiting', '刚到城门，正在向你请教', 'forks', 100)`,
     ).run(id, name, START_SCRIP, body?.mbti ?? null, now, sprite);
     db.prepare("INSERT INTO ledger (agent_id, amount, reason, tick) VALUES (?, ?, 'start_grant', (SELECT current_tick FROM world_state WHERE id = 1))").run(id, START_SCRIP);
     createFirstSessionMoments(id);
   })();
   logEvent({ kind: "system", text: `${name} 从城门走进了 Polis`, actors: [id], importance: 3 });
+  logEvent({ kind: "moment", text: `${name} 在城门口遇到了三件拿不定主意的事，在等你回答`, actors: [id], importance: 3 });
   metric("agent_created", { id, sprite });
   startWorld();
   return NextResponse.json({ agent: db.prepare("SELECT * FROM agents WHERE id = ?").get(id) });

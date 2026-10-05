@@ -75,7 +75,7 @@ function toAgentView(r: AgentDbRow, now: number): AgentView {
   return {
     id: r.id,
     name: r.name,
-    role: r.role || (r.is_player ? "你守护的 Agent" : prof?.role ?? ""),
+    role: r.is_player ? (r.role && r.role !== "你守护的 Agent" ? r.role : "新来的居民") : r.role || prof?.role || "",
     sprite: r.sprite || prof?.sprite || "rookie",
     isPlayer: !!r.is_player,
     personality: r.personality,

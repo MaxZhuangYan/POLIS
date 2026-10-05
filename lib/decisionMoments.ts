@@ -161,7 +161,7 @@ function insertMoment(m: NewMoment): number {
       context: JSON.stringify(m.context ?? {}),
     });
   const id = Number(res.lastInsertRowid);
-  logEvent({
+  if (!m.templateId.startsWith("FIRST_")) logEvent({
     kind: "moment",
     text: `${agentName(m.agentId)} 拿不定主意，在等你的一句话`,
     actors: [m.agentId, ...(m.speakerId ? [m.speakerId] : [])],

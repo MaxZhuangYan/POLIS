@@ -316,7 +316,7 @@ export function resolveTask(task: TaskRow): void {
     }
     logEvent({
       kind: task.success_rate < 1 ? "risk" : "task",
-      text: `${members.map(agentName).join(" 和 ")} 的${task.name}失败了${loss > 0 ? `（各损失 ${loss} Scrip）` : ""}`,
+      text: `${members.map(agentName).join(" 和 ")} 的${task.name}失败了${loss > 0 ? `（${members.length > 1 ? "各" : ""}损失 ${loss} Scrip）` : ""}`,
       actors: members,
       importance: members.some(isPlayer) ? 3 : 2,
       data: { taskId: task.id, loss },
