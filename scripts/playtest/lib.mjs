@@ -38,7 +38,8 @@ const BENIGN_WARNING = /GPU stall|ReadPixels|SwiftShader|WebGL|GroupMarkerNotSet
 
 export async function runPlaytest(name, opts, body) {
   const started = Date.now();
-  const outDir = path.join(ROOT, "playtest-output", name);
+  // PLAYTEST_TAG=before → playtest-output/<name>-before (keep two runs side by side)
+  const outDir = path.join(ROOT, "playtest-output", process.env.PLAYTEST_TAG ? `${name}-${process.env.PLAYTEST_TAG}` : name);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
   const llm = process.env.PLAYTEST_LLM === "env" ? "env" : "off";
@@ -195,10 +196,15 @@ export async function runPlaytest(name, opts, body) {
   try {
     log(`playtest "${name}" - ${opts.title ?? ""}`);
     log(`model: ${llm === "env" ? "ENV (the configured endpoint)" : "off (rules engine)"} - output: ${path.relative(ROOT, outDir)}`);
-    log("starting `next dev` on a free port (first compile can take a minute)...");
+    log(
+      process.env.PLAYTEST_PROD
+        ? `production: ${process.env.PLAYTEST_SKIP_BUILD ? "reusing the last build" : "`next build` (a few minutes)"}, then \`next start\` on a free port...`
+        : "starting `next dev` on a free port (first compile can take a minute)...",
+    );
     server = await startDevServer({ dbPath, llm });
     t.api = apiClient(server.base);
-    log(`server ready at ${server.base} (pid ${server.pid}, db ${dbPath})`);
+    t.mode = server.mode;
+    log(`server ready at ${server.base} (${server.mode}, pid ${server.pid}, db ${dbPath})`);
     // compile the page once up front so the browser never waits for it
     await fetch(server.base + "/", { signal: AbortSignal.timeout(sec(180)) }).catch(() => undefined);
     browser = await chromium.launch({ headless: process.env.PLAYTEST_HEADED !== "1" });

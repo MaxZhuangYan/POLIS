@@ -2,6 +2,9 @@
 // (scripts/playtest/*.mjs) and the scenario builder (scripts/scenario.mjs).
 //
 //   const server = await startDevServer({ dbPath });   // `next dev` on a free port, test mode, offline model
+//   startDevServer({ dbPath, mode: "prod" })            // `next build` into its own dir, then `next start`
+//                                                       // (PLAYTEST_PROD=1 does the same for every playtest;
+//                                                       //  PLAYTEST_SKIP_BUILD=1 reuses the last build)
 //   ... server.base is "http://localhost:<port>" ...
 //   await server.stop();                                // kills the whole process group, restores tsconfig.json
 //
@@ -15,7 +18,7 @@
 //
 // No dependencies beyond node itself.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -131,7 +134,8 @@ function killGroup(pid, signal) {
  * @param {number} [o.timeoutMs]        how long to wait for /api/game/state (default 180 s: the first compile is slow)
  */
 export async function startDevServer(o) {
-  const distDir = o.distDir || process.env.PLAYTEST_DIST_DIR || ".next-playtest";
+  const mode = o.mode || (process.env.PLAYTEST_PROD ? "prod" : "dev");
+  const distDir = o.distDir || process.env.PLAYTEST_DIST_DIR || (mode === "prod" ? ".next-playtest-prod" : ".next-playtest");
   const port = o.port || (await freePort());
   const unlock = lockDistDir(distDir);
   const restoreNext = snapshotNextTouched();
@@ -146,7 +150,16 @@ export async function startDevServer(o) {
   };
   if (o.testMode === false) delete env.POLIS_TEST_MODE;
 
-  const child = spawn(process.execPath, [NEXT_BIN, "dev", "-p", String(port)], {
+  if (mode === "prod" && !o.skipBuild && !process.env.PLAYTEST_SKIP_BUILD) {
+    // a production build of the current tree, in its own directory so it never fights a dev server's .next
+    const built = spawnSync(process.execPath, [NEXT_BIN, "build"], { cwd: ROOT, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    if (built.status !== 0) {
+      restoreNext();
+      unlock();
+      throw new Error(`next build failed:\n${`${built.stdout}\n${built.stderr}`.split("\n").slice(-40).join("\n")}`);
+    }
+  }
+  const child = spawn(process.execPath, [NEXT_BIN, mode === "prod" ? "start" : "dev", "-p", String(port)], {
     cwd: ROOT,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -194,7 +207,7 @@ export async function startDevServer(o) {
   process.on("SIGTERM", onSignal);
 
   const base = `http://localhost:${port}`;
-  const server = { base, port, pid: child.pid, distDir, log: () => log, stop, dbPath: o.dbPath };
+  const server = { base, port, pid: child.pid, distDir, mode, log: () => log, stop, dbPath: o.dbPath };
   try {
     await waitForGameState(base, { timeoutMs: o.timeoutMs ?? 180_000, hasExited: () => exited, log: () => log });
   } catch (err) {
