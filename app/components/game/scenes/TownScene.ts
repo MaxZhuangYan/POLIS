@@ -40,7 +40,7 @@ export interface TownApi {
 const FONT = '"PingFang SC","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei",sans-serif';
 const MAX_ZOOM = 4;
 const ZOOM_STEPS = [1, 1.5, 2, 2.5, 3, 4];
-const DEFAULT_ZOOM = 2.5;
+const DEFAULT_ZOOM = 2;
 const DEFAULT_ZOOM_PHONE = 2;
 const CHAR_H = 16; // a character is one tile
 const BUBBLE_MS = 7000;
@@ -187,15 +187,15 @@ interface Grade {
 }
 
 const GRADE_KEYS: { h: number; g: Grade }[] = [
-  { h: 0, g: { bright: 0.92, night: 0.4, warm: 0, warmColor: 0xff9a4a } },
-  { h: 5, g: { bright: 0.94, night: 0.36, warm: 0, warmColor: 0xff9a4a } },
+  { h: 0, g: { bright: 0.9, night: 0.56, warm: 0, warmColor: 0xff9a4a } },
+  { h: 5, g: { bright: 0.92, night: 0.5, warm: 0, warmColor: 0xff9a4a } },
   { h: 6.5, g: { bright: 1.1, night: 0.12, warm: 0.16, warmColor: 0xff9a5a } },
   { h: 8, g: { bright: 1.0, night: 0, warm: 0.04, warmColor: 0xffd890 } },
   { h: 16.5, g: { bright: 1.0, night: 0, warm: 0.04, warmColor: 0xffd890 } },
   { h: 18, g: { bright: 1.0, night: 0.06, warm: 0.2, warmColor: 0xff8a40 } },
   { h: 19.5, g: { bright: 1.0, night: 0.18, warm: 0.16, warmColor: 0xff7a40 } },
-  { h: 22, g: { bright: 0.93, night: 0.37, warm: 0, warmColor: 0xff9a4a } },
-  { h: 24, g: { bright: 0.92, night: 0.4, warm: 0, warmColor: 0xff9a4a } }
+  { h: 22, g: { bright: 0.92, night: 0.5, warm: 0, warmColor: 0xff9a4a } },
+  { h: 24, g: { bright: 0.9, night: 0.56, warm: 0, warmColor: 0xff9a4a } }
 ];
 
 function gradeAt(hour: number): Grade {

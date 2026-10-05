@@ -90,7 +90,12 @@ function toAgentView(r: AgentDbRow, now: number): AgentView {
     partnerId: r.partner_id,
     taskName,
     emote: (r.emote as Emote) ?? null,
-    bubble: r.bubble_text && r.bubble_at_ms ? { text: r.bubble_text, atMs: r.bubble_at_ms } : null,
+    // A line is "said" for 45 sim-minutes; after a fast-forward or a long
+    // absence old lines must not all pop up at once, and sleepers stay quiet.
+    bubble:
+      r.bubble_text && r.bubble_at_ms && now - r.bubble_at_ms < 45 * 60_000 && r.activity !== "sleeping"
+        ? { text: r.bubble_text, atMs: r.bubble_at_ms }
+        : null,
     scrip: r.scrip,
     reputation: r.reputation,
   };
