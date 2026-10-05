@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { JudgmentView } from "@/lib/types";
 import type { GameActions } from "../actions";
-import { Btn, Icon, Spinner } from "./common";
+import { Btn, CloseGlyph, GLYPH_DOWN, GLYPH_RIGHT, Icon, PixelGlyph, Spinner } from "./common";
 import styles from "./hud.module.css";
 
 // ───────────────────────────── guardian dock (bottom-centre) ─────────────────────────────
@@ -26,25 +26,28 @@ export function Dock({
   onPrinciples: () => void;
 }) {
   return (
-    <nav className={`${styles.panel} ${styles.dock}`} aria-label="守护灵">
-      <button type="button" className={`${styles.dockBtn} ${pending > 0 ? styles.dockPulse : ""}`} onClick={onDecisions} data-coach="decisions">
-        <Icon name="help" size={30} />
+    <nav className={`${styles.bar} ${styles.dock}`} aria-label="守护灵">
+      <button type="button" className={`${styles.dockBtn} ${pending > 0 ? styles.dockPulse : ""}`} onClick={onDecisions} data-coach="decisions" title="岔路">
+        <Icon name="help" size={32} />
         <span className={styles.dockLabel}>岔路</span>
         {pending > 0 ? <span className={styles.badge}>{pending}</span> : null}
       </button>
-      <button type="button" className={styles.dockBtn} onClick={onNote} data-coach="note">
-        <Icon name="keyboard" size={30} />
+      <button type="button" className={styles.dockBtn} onClick={onNote} data-coach="note" title="留言（N）">
+        <Icon name="keyboard" size={32} />
         <span className={styles.dockLabel}>留言</span>
+        <span className={styles.dockKey} aria-hidden>N</span>
         <span className={`${styles.badge} ${styles.badgeSoft}`}>{noteLeft}/3</span>
       </button>
-      <button type="button" className={`${styles.dockBtn} ${unread > 0 ? styles.dockPulse : ""}`} onClick={onPostcards} data-coach="postcard">
-        <Icon name="ticket" size={30} />
+      <button type="button" className={`${styles.dockBtn} ${unread > 0 ? styles.dockPulse : ""}`} onClick={onPostcards} data-coach="postcard" title="明信片（P）">
+        <Icon name="ticket" size={32} />
         <span className={styles.dockLabel}>明信片</span>
+        <span className={styles.dockKey} aria-hidden>P</span>
         {unread > 0 ? <span className={styles.badge}>{unread}</span> : null}
       </button>
-      <button type="button" className={styles.dockBtn} onClick={onPrinciples}>
-        <Icon name="thoughts" size={30} />
+      <button type="button" className={styles.dockBtn} onClick={onPrinciples} title="烙印（R）">
+        <Icon name="thoughts" size={32} />
         <span className={styles.dockLabel}>烙印</span>
+        <span className={styles.dockKey} aria-hidden>R</span>
       </button>
     </nav>
   );
@@ -57,9 +60,9 @@ export function LocateButton({ following, onClick }: { following: boolean; onCli
       className={`${styles.locate} ${following ? styles.locateOn : ""}`}
       onClick={onClick}
       aria-pressed={following}
-      title={following ? "正在跟随（再点一次取消）" : "定位我的 Agent"}
+      title={following ? "正在跟随（再点一次取消）" : "定位我的 Agent（空格）"}
     >
-      <Icon name="player-marker" size={30} />
+      <Icon name="player-marker" size={32} />
       <span className={styles.srOnly}>定位我的 Agent</span>
     </button>
   );
@@ -84,8 +87,8 @@ export function TestPanel({ busy, onAdvance }: { busy: boolean; onAdvance: GameA
   return (
     <section className={`${styles.panel} ${styles.testPanel}`} aria-label="测试快进">
       <button type="button" className={styles.testHead} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span>🧪 测试快进（仅测试用）</span>
-        {busy ? <Spinner size={14} /> : <span aria-hidden>{open ? "▾" : "▸"}</span>}
+        <span>测试快进（仅测试用）</span>
+        {busy ? <Spinner size={14} /> : <PixelGlyph rows={open ? GLYPH_DOWN : GLYPH_RIGHT} scale={2} />}
       </button>
       {open ? (
         <div className={styles.testBtns}>
@@ -132,7 +135,7 @@ function ToastRow({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number
   }, [item.id, item.tone, onDismiss]);
   return (
     <button type="button" className={`${styles.toast} ${styles[`toast_${item.tone}`]}`} onClick={() => onDismiss(item.id)}>
-      <Icon name={TOAST_ICON[item.tone]} size={20} />
+      <Icon name={TOAST_ICON[item.tone]} size={32} />
       <span>{item.text}</span>
     </button>
   );
@@ -147,26 +150,9 @@ export function Banner({ kind, text, onClose }: { kind: "conn" | "error"; text: 
       <span>{text}</span>
       {onClose ? (
         <button type="button" className={styles.bannerClose} onClick={onClose} aria-label="关闭提示">
-          ✕
+          <CloseGlyph />
         </button>
       ) : null}
-    </div>
-  );
-}
-
-export function LoadingScreen() {
-  return (
-    <div className={styles.loading} role="status" aria-live="polite">
-      <div className={styles.loadingBox}>
-        <span className={styles.loadingTitle}>POLIS</span>
-        <span className={styles.pixelSpinner} aria-hidden>
-          <i />
-          <i />
-          <i />
-          <i />
-        </span>
-        <span className={styles.loadingText}>正在进入小镇…</span>
-      </div>
     </div>
   );
 }
@@ -188,18 +174,18 @@ export function FeedbackPrompt({
     <section className={`${styles.panel} ${styles.feedback}`} aria-label="反馈">
       <p>这次它的反应让你觉得：</p>
       <div className={styles.feedbackBtns}>
-        <Btn busy={busy} onClick={() => onPick("expected")}>
+        <Btn size="sm" busy={busy} onClick={() => onPick("expected")}>
           意料之中
         </Btn>
-        <Btn busy={busy} onClick={() => onPick("surprising_reasonable")}>
+        <Btn size="sm" busy={busy} onClick={() => onPick("surprising_reasonable")}>
           意外但合理
         </Btn>
-        <Btn busy={busy} onClick={() => onPick("confusing")}>
+        <Btn size="sm" busy={busy} onClick={() => onPick("confusing")}>
           莫名其妙
         </Btn>
       </div>
       <button type="button" className={styles.closeBtn} onClick={onDismiss} aria-label="不评价">
-        ✕
+        <CloseGlyph />
       </button>
     </section>
   );
@@ -337,7 +323,7 @@ export function CoachMarks({
           <button type="button" className={styles.coachSkip} onClick={onSkip}>
             跳过
           </button>
-          <Btn variant="primary" onClick={onNext} autoFocus>
+          <Btn variant="primary" size="sm" onClick={onNext} autoFocus>
             知道了
           </Btn>
         </div>

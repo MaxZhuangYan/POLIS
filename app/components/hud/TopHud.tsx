@@ -18,29 +18,28 @@ export function AgentCard({
 }) {
   return (
     <section className={`${styles.panel} ${styles.agentCard}`} aria-label="我的 Agent" data-coach="agent-card">
-      <button type="button" className={styles.portraitBtn} onClick={onOpenPrinciples} title="查看它的烙印">
-        <Portrait sprite={agent.sprite} size={60} player />
+      <button type="button" className={styles.portraitBtn} onClick={onOpenPrinciples} title="查看它的烙印（R）">
+        <Portrait sprite={agent.sprite} size={48} player />
       </button>
       <div className={styles.agentMeta}>
         <div className={styles.nameRow}>
-          <span className={styles.star}>★</span>
-          <strong className={styles.agentName}>{agent.name}</strong>
+          <strong className={styles.agentName}>★ {agent.name}</strong>
         </div>
         <span className={styles.youTag}>你守护的 Agent{agent.role && agent.role !== "你守护的 Agent" ? ` · ${agent.role}` : ""}</span>
       </div>
       <ul className={styles.chips}>
         <li className={styles.chip} title="Scrip（城邦通用的小额货币）">
-          <Icon name="scrip" size={18} />
+          <Icon name="scrip" size={16} />
           <span className={styles.chipVal}>{agent.scrip}</span>
           <span className={styles.chipLabel}>Scrip</span>
         </li>
         <li className={styles.chip} title="声望">
-          <Icon name="reputation" size={18} />
+          <Icon name="reputation" size={16} />
           <span className={styles.chipVal}>{agent.reputation}</span>
           <span className={styles.chipLabel}>声望</span>
         </li>
         <li className={styles.chip} title="它对你的信任（0–200）">
-          <Icon name="relations" size={18} />
+          <Icon name="relations" size={16} />
           <span className={styles.chipVal}>
             {trust}
             <small>/200</small>
@@ -70,10 +69,9 @@ export function Reason({ text, compact = false }: { text: string; compact?: bool
 
 export function ClockPill({ day, clock, night, minutesToTick }: { day: number; clock: string; night: boolean; minutesToTick: number | null }) {
   return (
-    <div className={`${styles.panel} ${styles.clockPill}`} aria-label="小镇时间">
-      <SunMoon night={night} size={20} />
+    <div className={`${styles.bar} ${styles.clockPill}`} aria-label="小镇时间">
+      <SunMoon night={night} size={32} />
       <span className={styles.clockDay}>第 {day} 天</span>
-      <span className={styles.clockDot}>·</span>
       <span className={styles.clockTime}>{clock}</span>
       {minutesToTick !== null ? (
         <span className={styles.clockTick}>{minutesToTick <= 0 ? "即将整点" : `下个整点 ${minutesToTick} 分钟后`}</span>
@@ -101,6 +99,8 @@ function parseRemaining(text: string): string | null {
   return `${m[1]} ${unit === "分" ? "分钟" : unit}`;
 }
 
+const PROGRESS_SEGMENTS = 20;
+
 /** "当前行动" progress bar for my Agent, in the spirit of AIvilization's action bar.
  *  A task (progress !== null) shows its own percentage and the remaining time the server wrote into
  *  activityText; with no task the bar is hidden, except while walking, where it shows the trip. */
@@ -118,8 +118,9 @@ export function ActionBar({ agent, simNow }: { agent: AgentView; simNow: number 
     if (!name) name = "赶路";
   }
   const label = name ?? ACTIVITY_LABEL[agent.activity];
+  const filled = pct === null ? 0 : Math.round((pct / 100) * PROGRESS_SEGMENTS);
   return (
-    <section className={`${styles.panel} ${styles.actionBar}`} aria-label="当前行动" data-coach="action-bar">
+    <section className={`${styles.bar} ${styles.actionBar}`} aria-label="当前行动" data-coach="action-bar">
       <div className={styles.actionHead}>
         <span className={styles.actionLabel}>当前行动</span>
         <strong className={styles.actionName}>{label}</strong>
@@ -128,7 +129,9 @@ export function ActionBar({ agent, simNow }: { agent: AgentView; simNow: number 
       </div>
       {pct !== null ? (
         <div className={styles.progress} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-          <i style={{ width: `${pct}%` }} />
+          {Array.from({ length: PROGRESS_SEGMENTS }, (_, i) => (
+            <i key={i} className={i < filled ? styles.progressOn : ""} />
+          ))}
         </div>
       ) : null}
       {agent.reason ? <Reason text={agent.reason} compact /> : null}
@@ -142,7 +145,7 @@ export function StatusPills({ world }: { world: WorldView }) {
   const offline = world.llm.mode === "offline";
   return (
     <div className={styles.pills}>
-      {world.testMode ? <span className={`${styles.pill} ${styles.pillTest}`}>🧪 测试模式</span> : null}
+      {world.testMode ? <span className={`${styles.pill} ${styles.pillTest}`}>测试模式</span> : null}
       <span className={`${styles.pill} ${offline ? styles.pillMuted : styles.pillLive}`} title={world.llm.label}>
         <i aria-hidden className={styles.pillDot} />
         <span className={styles.pillLong}>{offline ? "离线模式（规则引擎）" : world.llm.label || "智能模式"}</span>

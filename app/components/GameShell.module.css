@@ -1,18 +1,74 @@
-/* The shell owns the design tokens used by every HUD / modal stylesheet. */
+/* The shell owns the design tokens used by every HUD / modal stylesheet.
+
+   Art direction: the Ninja Adventure HUD. Parchment dialogue boxes with dark-brown pixel borders (9-slice PNGs in
+   public/assets/ui, painted with border-image at 2x and `image-rendering: pixelated`), wood-toned bars for the top HUD /
+   dock / rail, bevel buttons that sink 2 px when pressed, faceset portraits in framed boxes, a warm palette that matches
+   the tileset. Square corners everywhere except the stepped ones that come with the frames.
+
+   Typography: ONE pixel font (Fusion Pixel 12px Proportional SC, --font-pixel). It is drawn on a 12 px grid, so it is only
+   ever set at 12 px (chrome, small text) or 24 px (headings, buttons, key numbers, and the story prose: fork prompts, the
+   Agent's judgment speech, postcards). We looked at both candidates in screenshots: the CJK glyphs hold up at 24 px and
+   keep the page one coherent pixel game; a system CJK stack at ~16 px inside the frames looked like a web page. */
 
 .root {
-  --panel: rgba(14, 18, 32, 0.86);
-  --line: #3b4a6b;
-  --line-hi: #5870a0;
-  --text: #e9eefc;
-  --muted: #a3b0cf;
-  --dim: #7686a8;
+  /* parchment + ink */
+  --paper: #fbeed6;
+  --paper-2: #f2dcb2;
+  --paper-3: #e4c995;
+  --ink: #3a2414;
+  --ink-2: #6b4a2b;
+  --ink-3: #8d7150;
+  --edge: #2b180d;
+  /* wood */
+  --wood-1: #4a2c18;
+  --wood-2: #6b4128;
+  --wood-3: #93602f;
+  --wood-4: #b98245;
+  --cream: #fbeed6;
+  --cream-2: #e6cd9c;
+  --cream-3: #c4a574;
+  /* accents: the player's gold, and the three domains tuned to the town's palette (-lt: readable on wood) */
   --gold: #f2c75c;
-  --trust: #5cc8a4;
-  --risk: #f08a4b;
-  --integrity: #7aa2ff;
-  --ok: #6fd08c;
-  --font: "PingFang SC", "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --gold-dk: #b98a1f;
+  --gold-hi: #fff3bd;
+  --gold-ink: #7c4f08;
+  --trust: #2b7f5e;
+  --risk: #b8501b;
+  --integrity: #3a5fae;
+  --trust-lt: #6fd9aa;
+  --risk-lt: #ffa56a;
+  --integrity-lt: #9dbbff;
+  --ok: #3f9a52;
+  --danger: #b8442f;
+  /* frames (public/assets/ui, built by scripts/build-ui-frames.py) */
+  --frame-paper: url("/assets/ui/frame-paper.png");
+  --frame-paper-s: url("/assets/ui/frame-paper-s.png");
+  --frame-notice: url("/assets/ui/frame-notice.png");
+  --frame-alert: url("/assets/ui/frame-alert.png");
+  --frame-wood: url("/assets/ui/frame-wood.png");
+  --frame-slot: url("/assets/ui/frame-slot.png");
+  --frame-input: url("/assets/ui/frame-input.png");
+  --frame-portrait: url("/assets/ui/frame-portrait.png");
+  --frame-portrait-gold: url("/assets/ui/frame-portrait-gold.png");
+  --btn-orange: url("/assets/ui/btn-orange.png");
+  --btn-orange-hover: url("/assets/ui/btn-orange-hover.png");
+  --btn-orange-down: url("/assets/ui/btn-orange-down.png");
+  --btn-gold: url("/assets/ui/btn-gold.png");
+  --btn-gold-hover: url("/assets/ui/btn-gold-hover.png");
+  --btn-gold-down: url("/assets/ui/btn-gold-down.png");
+  --btn-red: url("/assets/ui/btn-red.png");
+  --btn-red-hover: url("/assets/ui/btn-red-hover.png");
+  --btn-red-down: url("/assets/ui/btn-red-down.png");
+  --btn-off: url("/assets/ui/btn-off.png");
+  --btn-tile: url("/assets/ui/btn-tile.png");
+  --btn-tile-hover: url("/assets/ui/btn-tile-hover.png");
+  --btn-tile-down: url("/assets/ui/btn-tile-down.png");
+  --btn-tile-on: url("/assets/ui/btn-tile-on.png");
+  --btn-tile-on-hover: url("/assets/ui/btn-tile-on-hover.png");
+  --btn-tile-on-down: url("/assets/ui/btn-tile-on-down.png");
+  /* focus: a gold ring inside a dark ring, readable on parchment, wood and the town */
+  --focus: 0 0 0 2px var(--gold-hi);
+  --font: var(--font-pixel);
 
   position: relative;
   width: 100%;
@@ -20,18 +76,26 @@
   height: var(--shell-h, 100dvh);
   overflow: hidden;
   background: #0b1020;
-  color: var(--text);
+  color: var(--ink);
   font-family: var(--font);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 18px;
+  image-rendering: pixelated;
+  -webkit-font-smoothing: none;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
 }
-.root * {
+/* :where() keeps this at zero specificity: the framed portraits are content-box on purpose */
+:where(.root) *,
+:where(.root) *::before,
+:where(.root) *::after {
   box-sizing: border-box;
 }
 .root button {
   font-family: inherit;
+}
+.root img {
+  image-rendering: pixelated;
 }
 
 .hud {

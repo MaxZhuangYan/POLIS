@@ -4,6 +4,8 @@
 // Query params for QA / screenshots:
 //   ?scene=forks|imprint|play|refuse|refuseNoForce|adjust|wavering|notes|postcard|onboarding|loading
 //   &hour=21 (world clock)  &test=0|1  &offline=0|1  &debug=1 (collision / stand areas / slots / doors)  &coach=1 (show coach marks)  &retry=1
+//   &title=0 (skip the title screen: GameShell reads this itself)  &away=3 (pretend the player last looked 3 sim-hours ago:
+//   the welcome-back card)  Esc / ? / WASD ... all keys work as in the game.
 
 import { useEffect, useRef, useState } from "react";
 import type { GameSnapshot } from "@/lib/types";
@@ -14,6 +16,7 @@ import styles from "./page.module.css";
 
 const HOURS = [6, 9, 14, 18, 21, 23];
 const COACH_KEYS = ["agent", "activity", "note", "postcard"].map((k) => `polis.coach.v1.${k}`);
+const LAST_SEEN_KEY = "polis.lastSeenSimMs.v1";
 
 export default function DevTownPage() {
   const gameRef = useRef<MockGame | null>(null);
@@ -42,10 +45,23 @@ export default function DevTownPage() {
     }
     const g = new MockGame(initial);
     gameRef.current = g;
+    (window as unknown as { __mock?: MockGame }).__mock = g; // QA handle: this page never ships (see dev/layout.tsx)
     if (q.get("hour")) g.setHour(Number(q.get("hour")));
     if (q.get("test") === "0") g.opts.testMode = false;
     if (q.get("offline") === "0") g.opts.offline = false;
     if (q.get("retry") === "1") g.retrying = true;
+    const away = Number(q.get("away"));
+    if (away > 0) {
+      // the welcome-back card: the "previous session" last saw the town `away` hours ago
+      const created = g.build()?.player?.createdAtMs;
+      if (created) {
+        try {
+          window.localStorage.setItem(LAST_SEEN_KEY, JSON.stringify({ ms: Math.round(g.simNow() - away * 3_600_000), createdAtMs: created }));
+        } catch {
+          /* ignore */
+        }
+      }
+    }
     setScene(initial);
     setTestMode(g.opts.testMode);
     setOffline(g.opts.offline);
@@ -138,6 +154,23 @@ export default function DevTownPage() {
         </button>
         <button type="button" className={`${styles.chip} ${debug ? styles.on : ""}`} onClick={() => setDebug((v) => !v)}>
           碰撞/站位调试
+        </button>
+        <button
+          type="button"
+          className={styles.chip}
+          onClick={() => {
+            // back to the title screen: drop ?title=0 and remount the shell
+            try {
+              const u = new URL(window.location.href);
+              u.searchParams.delete("title");
+              window.history.replaceState(null, "", u.toString());
+            } catch {
+              /* ignore */
+            }
+            setShellKey((k) => k + 1);
+          }}
+        >
+          回到标题
         </button>
         <button
           type="button"
