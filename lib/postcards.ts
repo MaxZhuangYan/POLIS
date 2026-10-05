@@ -165,23 +165,25 @@ function composeTemplate(f: Facts, noteLines: string[]): string[] {
   return lines;
 }
 
-async function maybePolish(f: Facts, draft: string[]): Promise<string[] | null> {
-  if (!(await llmAvailable())) return null;
+type Polish = { lines: string[] | null; reason: string };
+
+async function maybePolish(f: Facts, draft: string[]): Promise<Polish> {
+  if (!(await llmAvailable())) return { lines: null, reason: "offline" };
   const system =
     "你是 Polis 城邦居民，在给你的守护灵写今晚的明信片。第一人称，像朋友说话，不是报表。3-6 句。" +
     "只能使用给定事实里的事件、人名和数字，不得新增任何事件或数字；至少原样引用一条『』里的原则。只输出明信片正文，每句一行。";
   const user = `你的名字：${f.agentName}\n今天的草稿（全部为真实事实）：\n${draft.join("\n")}`;
-  const out = await chat(system, user, { temperature: 0.5, maxTokens: 500, timeoutMs: 20_000 });
-  if (!out) return null;
+  const out = await chat(system, user, { kind: "postcard", temperature: 0.5, maxTokens: 500, timeoutMs: 45_000 });
+  if (!out) return { lines: null, reason: "no_answer" };
   const lines = out.split(/\n+/).map((s) => s.trim()).filter(Boolean).slice(0, 7);
   const draftText = draft.join(" ");
   const allowedNums = new Set(draftText.match(/\d+/g) ?? []);
   const text = lines.join(" ");
-  if ((text.match(/\d+/g) ?? []).some((n) => !allowedNums.has(n))) return null;
-  for (const n of f.names) if (text.includes(n) && !draftText.includes(n)) return null;
+  if ((text.match(/\d+/g) ?? []).some((n) => !allowedNums.has(n))) return { lines: null, reason: "invented_number" };
+  for (const n of f.names) if (text.includes(n) && !draftText.includes(n)) return { lines: null, reason: "invented_name" };
   const quotes = Array.from(draftText.matchAll(/『(.+?)』/g)).map((m) => m[1]);
-  if (quotes.length > 0 && !quotes.some((q) => text.includes(q))) return null;
-  return lines;
+  if (quotes.length > 0 && !quotes.some((q) => text.includes(q))) return { lines: null, reason: "dropped_principle" };
+  return { lines, reason: "ok" };
 }
 
 export function writeNightlyPostcard(agentId: string): number | null {
@@ -214,10 +216,12 @@ export function writeNightlyPostcard(agentId: string): number | null {
   metric("postcard_written", { postcardId, source: "template", lines: lines.length });
 
   // Async polish never blocks the tick; on success it replaces the text and flips source.
-  void maybePolish(facts, lines).then((polished) => {
-    if (!polished) return;
-    db.prepare("UPDATE postcards SET lines_json = ?, source = 'llm' WHERE id = ? AND read_ms IS NULL").run(JSON.stringify(polished), postcardId);
-    metric("postcard_polished", { postcardId });
+  void maybePolish(facts, lines).then(({ lines: polished, reason }) => {
+    // never swap the text under a player who already read the card
+    const applied = polished
+      ? db.prepare("UPDATE postcards SET lines_json = ?, source = 'llm' WHERE id = ? AND read_ms IS NULL").run(JSON.stringify(polished), postcardId).changes > 0
+      : false;
+    metric("postcard_polish", { postcardId, reason: polished && !applied ? "already_read" : reason, applied });
   });
 
   if (facts.dayIndex === 6) writeRecap7(agentId);

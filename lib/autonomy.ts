@@ -238,7 +238,7 @@ async function llmJudge(agentId: string, moment: MomentRow, chosen: MomentOption
     `情境：${moment.prompt_text}\n事实：${[...facts, ...evidence].join("；") || "无"}\n` +
     `守护灵建议你：「${chosen.label}」。其他选项：${options.filter((o) => o.id !== chosen.id).map((o) => `「${o.label}」`).join("、")}` +
     (ctx.adjust ? `；可行的折中：「${ctx.adjust.label}」` : "");
-  const raw = await chat(system, user, { temperature: 0.4, maxTokens: 400, timeoutMs: 15_000 });
+  const raw = await chat(system, user, { kind: "judge", temperature: 0.4, maxTokens: 400, timeoutMs: 15_000 });
   if (!raw) return null;
   const parsed = extractJson(raw) as { decision?: string; cited_principle_ids?: unknown; to_player?: unknown; reason?: unknown } | null;
   if (!parsed) return { ...ruleJudge(agentId, moment, chosen, options), decision: "execute", gate: "gate_fail", alt: null };

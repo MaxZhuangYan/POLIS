@@ -13,6 +13,7 @@
 // This is a mechanics regression with the OFFLINE rule engine; it is not
 // evidence of real-LLM personality quality.
 
+import { llmReport } from "./llm-report.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -21,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const LLM_RUN = process.env.SIM_LLM === "env" || !!process.env.SIM_LLM_URL;
 const POLICY = process.argv[2] === "careful" ? "careful" : "bold";
 const DAYS = Number(process.argv[3] ?? 7);
 const PORT = 3000 + 60 + (POLICY === "bold" ? 1 : 2);
@@ -78,7 +80,12 @@ async function main() {
       POLIS_TEST_MODE: "1",
       POLIS_DB_PATH: DB_PATH,
       NEXT_DIST_DIR: `.next-sim-${POLICY}`,
-      ...(process.env.SIM_LLM_URL ? { POLIS_LLM_URL: process.env.SIM_LLM_URL, POLIS_LLM_MODEL: "mock-plumbing" } : { POLIS_LLM: "off" }),
+      // SIM_LLM=env: use the endpoint configured in .env.local / the environment (a real model run)
+      ...(process.env.SIM_LLM === "env"
+        ? {}
+        : process.env.SIM_LLM_URL
+          ? { POLIS_LLM_URL: process.env.SIM_LLM_URL, POLIS_LLM_MODEL: "mock-plumbing", POLIS_LLM_API_KEY: "" }
+          : { POLIS_LLM: "off" }),
     },
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
@@ -143,7 +150,21 @@ async function main() {
         story.push(`Day${p.dayIndex + 1} WAVERING: ${p.pendingWavering.promptText}`);
         await api("POST", `/api/wavering/${p.pendingWavering.id}/resolve`, { resolution: "reaffirm" });
       }
-      for (const c of p.postcards.items.filter((c) => !c.read)) {
+      let cards = p.postcards.items.filter((c) => !c.read);
+      if (LLM_RUN && cards.length) {
+        // let the model's polish land before "reading" the card (a read card is never rewritten)
+        const pdb = new Database(DB_PATH, { readonly: true });
+        for (const c of cards) {
+          for (let i = 0; i < 60; i++) {
+            const done = pdb.prepare("SELECT 1 FROM metric_events WHERE name = 'postcard_polish' AND json_extract(payload_json, '$.postcardId') = ?").get(c.id);
+            if (done) break;
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+        }
+        pdb.close();
+        cards = (await api("GET", "/api/game/state")).json.player.postcards.items.filter((c) => !c.read);
+      }
+      for (const c of cards) {
         story.push(`Day${c.dayIndex + 1} POSTCARD (${c.kind}/${c.source}):\n      ${c.lines.join("\n      ")}`);
         const texts = new Set(p.principles.map((x) => x.text));
         const quotes = [...c.lines.join("").matchAll(/『(.+?)』/g)].map((m) => m[1]);
@@ -192,6 +213,9 @@ async function main() {
     const rels = s.player.relationships.map((r) => `${r.otherId}:${r.familiarity}${r.incidents.length ? `(!${r.incidents.length})` : ""}`).join(" ");
     console.log(`Relationships: ${rels}`);
     db.close();
+    console.log("\n=== model (llm-report) ===");
+    console.log(llmReport(DB_PATH));
+    if (process.env.SIM_KEEP_DB) console.log(`(kept the save: ${DB_PATH})`);
   } catch (err) {
     failures++;
     console.error("run threw", err);
@@ -199,7 +223,7 @@ async function main() {
     try {
       process.kill(-server.pid, "SIGKILL");
     } catch {}
-    for (const suf of ["", "-wal", "-shm"]) if (existsSync(DB_PATH + suf)) rmSync(DB_PATH + suf);
+    if (!process.env.SIM_KEEP_DB) for (const suf of ["", "-wal", "-shm"]) if (existsSync(DB_PATH + suf)) rmSync(DB_PATH + suf);
   }
   console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
   if (failures) console.log(log.split("\n").slice(-30).join("\n"));

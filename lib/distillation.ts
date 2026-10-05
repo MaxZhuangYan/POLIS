@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { getDb } from "./db";
 import { simNow } from "./clock";
-import { llmAvailable, llmConfig } from "./llm";
+import { chat, llmAvailable } from "./llm";
 import { metric, remember, logEvent } from "./records";
 
 // ---------------------------------------------------------------------------
@@ -157,44 +157,9 @@ export function parseAndValidateLlmContent(content: string): LlmDistillationResu
 // decision_moments-shaped and includes production's retry policy), since
 // the regression test's purpose is measuring the raw model's compliance
 // rate against the test set's fixed prompt, not the pipeline's resilience.
-export async function callDistillationLlmRaw(userPrompt: string): Promise<string | null> {
-  const { url, model, apiKey } = llmConfig();
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-      body: JSON.stringify({
-        model,
-        temperature: 0.3,
-        max_tokens: 900,
-        // Both models on the LAN LM Studio box are "thinking" models that
-        // otherwise burn most/all of max_tokens on hidden chain-of-thought
-        // before ever writing `content` (measured during Phase 2/3 prep:
-        // google/gemma-4-e4b took ~24-45s and ~400-500 reasoning tokens per
-        // call). This param reliably suppresses it on Qwen (reasoning_tokens
-        // consistently 0, ~1.5s per call once warm); on Gemma it only
-        // suppresses it *some* of the time — harmless to send either way
-        // since an unsupported param is just ignored by the server.
-        reasoning_effort: "none",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-      }),
-      signal: AbortSignal.timeout(LMSTUDIO_TIMEOUT_MS),
-    });
-
-    if (!response.ok) return null;
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content;
-    return typeof content === "string" ? content : null;
-  } catch {
-    return null;
-  }
+export async function callDistillationLlmRaw(userPrompt: string, timeoutMs = LMSTUDIO_TIMEOUT_MS): Promise<string | null> {
+  // the shared client handles the concurrency cap, thinking-model output and call stats
+  return chat(SYSTEM_PROMPT, userPrompt, { kind: "distill", temperature: 0.3, maxTokens: 900, timeoutMs });
 }
 
 // A single attempt: POST to LM Studio, parse + validate. Returns null on ANY
@@ -203,24 +168,32 @@ export async function callDistillationLlmRaw(userPrompt: string): Promise<string
 async function requestDistillation(
   type: string,
   promptText: string,
-  optionLabel: string
+  optionLabel: string,
+  timeoutMs: number,
 ): Promise<LlmDistillationResult | null> {
-  const content = await callDistillationLlmRaw(buildUserPrompt(type, promptText, optionLabel));
+  const content = await callDistillationLlmRaw(buildUserPrompt(type, promptText, optionLabel), timeoutMs);
   if (content === null) return null;
   return parseAndValidateLlmContent(content);
 }
 
 // Two identical attempts total (one call + one retry), per spec. Returns null
 // only if both attempts fail — the caller then falls back.
+// A player is watching the imprint form (the FTUE "3 条原则已写入记忆" card, or the feed right after a fork), so the
+// whole thing has a budget: a retry only runs if it can still finish inside it.
+const DISTILL_BUDGET_MS = 25_000;
+
 async function distillViaLlmWithRetry(
   type: string,
   promptText: string,
   optionLabel: string
 ): Promise<LlmDistillationResult | null> {
-  const first = await requestDistillation(type, promptText, optionLabel);
+  const t0 = Date.now();
+  const first = await requestDistillation(type, promptText, optionLabel, 15_000);
   if (first) return first;
 
-  const retry = await requestDistillation(type, promptText, optionLabel);
+  const left = DISTILL_BUDGET_MS - (Date.now() - t0);
+  if (left < 5_000) return null;
+  const retry = await requestDistillation(type, promptText, optionLabel, left);
   if (retry) return retry;
 
   return null;

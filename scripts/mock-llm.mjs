@@ -10,11 +10,18 @@
 import http from "node:http";
 
 const PORT = Number(process.argv[2] ?? 11434);
+// MOCK_THINK=1 wraps every answer in a <think> block (a thinking model);
+// MOCK_COLD_MS=n delays the first chat request by n ms (a cold hosted model);
+// MOCK_LATENCY_MS=n delays every chat request (to exercise the concurrency cap).
+const THINK = process.env.MOCK_THINK === "1";
+let coldMs = Number(process.env.MOCK_COLD_MS ?? 0);
+const LATENCY = Number(process.env.MOCK_LATENCY_MS ?? 0);
 let n = 0;
-const stats = { distill: 0, judge: 0, postcard: 0, invalid: 0 };
+let inFlight = 0;
+const stats = { distill: 0, judge: 0, postcard: 0, warmup: 0, invalid: 0, maxConcurrent: 0 };
 
 function reply(content) {
-  return JSON.stringify({ choices: [{ message: { role: "assistant", content } }] });
+  return JSON.stringify({ choices: [{ message: { role: "assistant", content: THINK ? `<think>先想一想……</think>\n${content}` : content } }] });
 }
 
 const server = http.createServer((req, res) => {
@@ -30,12 +37,22 @@ const server = http.createServer((req, res) => {
   }
   let body = "";
   req.on("data", (c) => (body += c));
-  req.on("end", () => {
+  req.on("end", async () => {
     n++;
+    inFlight++;
+    stats.maxConcurrent = Math.max(stats.maxConcurrent, inFlight);
+    res.on("close", () => inFlight--);
+    const wait = coldMs + LATENCY;
+    coldMs = 0;
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     const parsed = JSON.parse(body || "{}");
     const system = parsed.messages?.[0]?.content ?? "";
     const user = parsed.messages?.[1]?.content ?? "";
     res.writeHead(200, { "Content-Type": "application/json" });
+    if (system.startsWith("只回答 OK")) {
+      stats.warmup++;
+      return res.end(reply("OK"));
+    }
     if (system.includes("记忆系统")) {
       stats.distill++;
       if (n % 5 === 0) {
