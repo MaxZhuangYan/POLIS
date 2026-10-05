@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { atSimTime, simNow, hourStart, HOUR_MS, localParts, worldTz, addOffsetMs, nextLocalHour, isTestMode } from "./clock";
+import { atSimTime, simNow, hourStart, HOUR_MS, DAY_MS, localParts, worldTz, addOffsetMs, nextLocalHour, isTestMode } from "./clock";
 import { LOCATION_NAMES, NPC_BY_ID, TEMPLATE_BY_ID, type Traits, type TaskTemplate } from "./content";
 import {
   adjustRelationship,
@@ -50,6 +50,7 @@ import {
 import { maybeRunDistillationBatch } from "./distillation";
 import { maybeDilemma } from "./dilemmas";
 import { fadeHearsay, gossipAbout, gossipBetween, hearsaySource } from "./gossip";
+import { buyIfAffordable, goalLoanWant, residentPurchases } from "./goals";
 import { checkTitle } from "./progression";
 import { llmAvailable } from "./llm";
 import { activeDirective } from "./notes";
@@ -175,7 +176,10 @@ export function runTick(tickMs: number): void {
       }
     }
     if (hour >= 19 && hour <= 21) eveningEncounters();
-    if (hour === 12) loanRequests();
+    if (hour === 12) {
+      residentPurchases();
+      loanRequests();
+    }
 
     const pid = playerId();
     if (pid) {
@@ -190,6 +194,11 @@ export function runTick(tickMs: number): void {
     if (hour === 4) {
       decayPrinciples();
       fadeHearsay();
+      // 疏远: a tie nobody has tended for three days loosens a little each night, never below what working
+      // together built (20 + 5 per joint job) — so who is close keeps changing after the first fortnight
+      db.prepare(
+        "UPDATE relationships SET familiarity = MAX(20 + 5 * coop_done, familiarity - 2) WHERE updated_ms < ? AND familiarity > 20 + 5 * coop_done",
+      ).run(simNow() - 3 * DAY_MS);
     }
     // Clear stale emotes/bubbles so the town does not keep yesterday's faces.
     db.prepare("UPDATE agents SET emote = NULL WHERE activity NOT IN ('sleeping','waiting') AND emote IN ('happy','upset','alert','think')").run();
@@ -750,31 +759,41 @@ function eveningEncounters(): void {
   }
 }
 
+// Who asks a friend for money: a resident who is broke (15 to get by), or one a little short of what they are
+// saving for (the difference, lib/goals.ts). One open loan per borrower.
 function loanRequests(): void {
-  for (const n of agents().filter((x) => !x.is_player && x.scrip < 20)) {
+  for (const n of agents().filter((x) => !x.is_player)) {
+    const want = n.scrip < 20 ? { amount: 15, purpose: null as string | null } : goalLoanWant(n.id, n.scrip, traitsOf(n.id).risk);
+    if (!want) continue;
     const already = getDb().prepare("SELECT COUNT(*) n FROM scheduled WHERE kind = 'loan_due' AND done = 0 AND payload_json LIKE ?").get(`%"borrower":"${n.id}"%`) as { n: number };
     if (already.n > 0) continue;
+    const amount = want.amount;
     const lender = agents()
-      .filter((x) => x.id !== n.id && x.scrip >= 40 && x.activity !== "sleeping")
+      .filter((x) => x.id !== n.id && x.scrip >= amount + 40 && x.activity !== "sleeping")
       .map((x) => ({ x, f: getRelationship(n.id, x.id).familiarity }))
       .filter((r) => r.f >= 8)
       .sort((r, s) => s.f - r.f || s.x.scrip - r.x.scrip)[0]?.x;
     if (!lender) continue;
-    const amount = 15;
     if (lender.is_player) {
       if (lender.onboarding !== "done") continue;
       const grudge = openIncidents(lender.id, n.id)[0];
       const heard = openHearsay(lender.id, n.id)[0];
       const sd = canDecideAlone(lender.id, "trust", grudge ? `${n.name} ${grudge.text}` : heard ? `${heard.text}——我没亲眼见过。` : null);
       if (sd.escalate && canAsk(lender.id, { template: "T-4" })) {
-        loanMoment(lender.id, n.id, amount, sd.why);
+        loanMoment(lender.id, n.id, amount, sd.why, want.purpose);
         continue;
       }
       const lend = sd.dir > 0 && !grudge;
       if (lend) {
-        applyLoan(lender.id, n.id, amount, sd.principle);
+        applyLoan(lender.id, n.id, amount, sd.principle, want.purpose);
       } else {
-        remember(lender.id, "self_decided", `${n.name} 来借 ${amount} Scrip。${sd.principle ? `你说过『${sd.principle.text}』，` : ""}我没借。`, { npc: n.id }, sd.principle?.id ?? null);
+        remember(
+          lender.id,
+          "self_decided",
+          `${n.name} ${want.purpose ? `想${want.purpose}，` : ""}来借 ${amount} Scrip。${sd.principle ? `你说过『${sd.principle.text}』，` : ""}我没借。`,
+          { npc: n.id },
+          sd.principle?.id ?? null,
+        );
         if (sd.principle) logCitation(sd.principle.id, `没借钱给 ${n.name}`, "neutral");
         say(n.id, "……好吧。", null);
       }
@@ -783,12 +802,12 @@ function loanRequests(): void {
     const t = traitsOf(lender.id);
     // a lender who has only heard stories lends if trusting enough; one who saw it for themselves does not
     if (t.trust >= 0.5 && openIncidents(lender.id, n.id).length === 0 && (t.trust >= 0.7 || openHearsay(lender.id, n.id).length === 0)) {
-      applyLoan(lender.id, n.id, amount, null);
+      applyLoan(lender.id, n.id, amount, null, want.purpose);
     }
   }
 }
 
-function applyLoan(lender: string, borrower: string, amount: number, principle: PrincipleRow | null): void {
+function applyLoan(lender: string, borrower: string, amount: number, principle: PrincipleRow | null, purpose: string | null = null): void {
   const db = getDb();
   db.prepare("UPDATE agents SET scrip = scrip - ? WHERE id = ?").run(amount, lender);
   db.prepare("UPDATE agents SET scrip = scrip + ? WHERE id = ?").run(amount, borrower);
@@ -797,9 +816,10 @@ function applyLoan(lender: string, borrower: string, amount: number, principle: 
   adjustRelationship(borrower, lender, 10, `借了我 ${amount} Scrip`);
   remember(lender, "loan", `借给 ${agentName(borrower)} ${amount} Scrip，两天后到期${principle ? `——你说过『${principle.text}』` : ""}。`, { borrower }, principle?.id ?? null);
   if (principle) logCitation(principle.id, `借钱给 ${agentName(borrower)}`, "neutral");
-  remember(borrower, "loan", `${agentName(lender)} 借了我 ${amount} Scrip。`, { lender });
+  remember(borrower, "loan", `${agentName(lender)} 借了我 ${amount} Scrip${purpose ? `，${purpose}的钱凑齐了` : ""}。`, { lender });
   logEvent({ kind: "relationship", text: `${agentName(lender)} 借给 ${agentName(borrower)} ${amount} Scrip（两天后到期）`, actors: [lender, borrower], importance: 2 });
   say(borrower, "谢了，两天内还。", "happy");
+  if (purpose) buyIfAffordable(borrower, lender);
 }
 
 // D6 Mira 复访 (FTUE §5.4): quotes the player's real D1 choice + her real week.

@@ -310,7 +310,7 @@ export function buildSnapshot(): GameSnapshot {
         i.kind === "hearsay"
           ? i.holder_id === pid
             ? `我${i.text}`
-            : `${n.name}${i.text}`
+            : `${n.name} ${i.text}`
           : i.holder_id === pid
             ? `我记着：${n.name} ${i.text}`
             : `${n.name} 记着你：${i.text}`,

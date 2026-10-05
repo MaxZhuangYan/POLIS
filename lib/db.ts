@@ -284,6 +284,8 @@ function createDb(): Database.Database {
     ["survey_json", "TEXT NOT NULL DEFAULT '[]'"],
     // highest reputation title reached (so a tier-up is announced once)
     ["title_tier", "INTEGER NOT NULL DEFAULT 0"],
+    // 置业 (lib/goals.ts): how many of its goals a resident has bought
+    ["goal_level", "INTEGER NOT NULL DEFAULT 0"],
   ]);
 
   addColumns(db, "world_state", [

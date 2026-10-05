@@ -464,7 +464,8 @@ function runLoanDue(p: { lender: string; borrower: string; amount: number }): vo
   const db = getDb();
   const b = db.prepare("SELECT scrip, traits_json FROM agents WHERE id = ?").get(p.borrower) as { scrip: number; traits_json: string };
   const traits = JSON.parse(b.traits_json || "{}") as { commitment?: number };
-  const willing = (traits.commitment ?? 0.7) > 0.5 || b.scrip >= p.amount * 2;
+  // the dependable repay as soon as they can; the less committed (Nova, 0.55) only when it leaves them a cushion
+  const willing = (traits.commitment ?? 0.7) > 0.6 || b.scrip >= p.amount * 2;
   if (b.scrip >= p.amount && willing) {
     pay(p.borrower, -p.amount, "loan_repay");
     pay(p.lender, p.amount, "loan_repay");

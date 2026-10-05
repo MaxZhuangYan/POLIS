@@ -119,6 +119,24 @@ export function longRunReport(db, pid) {
   lines.push(
     `gossip told ${gossip.length} (about the Agent ${aboutAgent}, to the Agent ${heardByAgent}) · hearsay held ${hearsay.filter((h) => !h.resolved).length}, faded or cleared ${hearsay.filter((h) => h.resolved).length} · refusals over a story ${refusedOnStory}`,
   );
+  // money that moves between people: loans (and how they ended) and what residents bought (lib/goals.ts)
+  const weekOf = (ms) => Math.floor(dayOf(ms) / 7);
+  const loans = db.prepare("SELECT at_ms FROM events WHERE text LIKE '%借给%Scrip（两天后到期）%'").all();
+  const repaid = db.prepare("SELECT COUNT(*) n FROM events WHERE text LIKE '%按时还给%'").get().n;
+  const unpaid = db.prepare("SELECT COUNT(*) n FROM events WHERE kind = 'default' AND text LIKE '%到期没还%'").get().n;
+  const buys = db.prepare("SELECT at_ms FROM metric_events WHERE name = 'purchase'").all();
+  const perWeek = (rows) => {
+    const out = Array.from({ length: Math.ceil(days / 7) }, () => 0);
+    for (const r of rows) if (weekOf(r.at_ms) >= 0 && weekOf(r.at_ms) < out.length) out[weekOf(r.at_ms)]++;
+    return out;
+  };
+  const loanWeeks = perWeek(loans);
+  lines.push(`loans per week ${loanWeeks.join(" ")} (repaid ${repaid}, unpaid ${unpaid}) · residents' purchases per week ${perWeek(buys).join(" ")}`);
+  const fullWeeks = Math.floor(days / 7);
+  if (fullWeeks >= 2) {
+    const deadWeeks = loanWeeks.slice(1, fullWeeks).map((n, i) => (n === 0 ? i + 2 : 0)).filter(Boolean);
+    checks.push({ label: "people still lend each other money after the first week", ok: deadWeeks.length < fullWeeks - 1, detail: `weeks without a loan: ${deadWeeks.join(",")}` });
+  }
   const fam = db.prepare("SELECT familiarity FROM relationships WHERE agent_id = ?").all(pid).map((r) => r.familiarity);
   lines.push(`Agent's familiarity with each resident: ${fam.join(" ")} (at 100: ${fam.filter((f) => f >= 100).length})`);
   return { lines, checks };

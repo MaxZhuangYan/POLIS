@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { buyIfAffordable } from "./goals";
 import { simNow, DAY_MS, HOUR_MS, localDayBounds, dayIndexSince, localParts, worldTz } from "./clock";
 import { TEMPLATE_BY_ID, LOCATION_NAMES, NPC_BY_ID, type TaskTemplate } from "./content";
 import {
@@ -516,7 +517,7 @@ export function repairMoment(agentId: string, npcId: string): number | null {
 }
 
 // T-4: an NPC who really is short of money asks to borrow.
-export function loanMoment(agentId: string, npcId: string, amount: number, why: string | null): number {
+export function loanMoment(agentId: string, npcId: string, amount: number, why: string | null, purpose: string | null = null): number {
   const npc = getDb().prepare("SELECT scrip FROM agents WHERE id = ?").get(npcId) as { scrip: number };
   const lastLoss = getDb()
     .prepare("SELECT text FROM memories WHERE agent_id = ? AND kind IN ('task_failed','betrayed') ORDER BY at_ms DESC LIMIT 1")
@@ -526,7 +527,9 @@ export function loanMoment(agentId: string, npcId: string, amount: number, why: 
     type: "trust",
     templateId: "T-4",
     speakerId: npcId,
-    promptText: `${agentName(npcId)} 来找我借 ${amount} Scrip，说两天内还。${lastLoss ? `TA 前阵子${lastLoss.text.replace(/。$/, "")}。` : ""}借吗？`,
+    promptText: purpose
+      ? `${agentName(npcId)} 想${purpose}，还差 ${amount} Scrip，来找我借，说两天内还。借吗？`
+      : `${agentName(npcId)} 来找我借 ${amount} Scrip，说两天内还。${lastLoss ? `TA 前阵子${lastLoss.text.replace(/。$/, "")}。` : ""}借吗？`,
     facts: [
       `${agentName(npcId)} 现在只有 ${npc.scrip} Scrip`,
       `TA 的公开档案：履约 ${publicRecord(npcId).done} 次 · 违约 ${publicRecord(npcId).defaults} 次`,
@@ -536,7 +539,7 @@ export function loanMoment(agentId: string, npcId: string, amount: number, why: 
       { id: "B", label: "不借", fallbackPrinciple: "钱只跟着记录走", stance: { domain: "trust", dir: -1 }, effect: { kind: "decline", npc: npcId, memory: `没有借钱给 ${agentName(npcId)}。` } },
     ],
     escalation: why,
-    context: { origin: `${agentName(npcId)} 手头紧，来借 ${amount} Scrip`, adjust: { label: `借一半（${Math.ceil(amount / 2)} Scrip）`, effect: { kind: "lend", to: npcId, amount: Math.ceil(amount / 2) } } },
+    context: { origin: purpose ? `${agentName(npcId)} 想${purpose}，来借 ${amount} Scrip` : `${agentName(npcId)} 手头紧，来借 ${amount} Scrip`, adjust: { label: `借一半（${Math.ceil(amount / 2)} Scrip）`, effect: { kind: "lend", to: npcId, amount: Math.ceil(amount / 2) } } },
   });
 }
 
@@ -856,6 +859,7 @@ export function applyEffect(
       remember(effect.to, "loan", `${agentName(agentId)} 借了我 ${effect.amount} Scrip。`, { from: agentId });
       say(effect.to, "谢了。两天内还你。", "happy");
       logEvent({ kind: "relationship", text: `${agentName(agentId)} 借给 ${agentName(effect.to)} ${effect.amount} Scrip（两天后到期）`, actors: [agentId, effect.to], importance: 2 });
+      buyIfAffordable(effect.to, agentId); // what the money was for, if it now covers it
       break;
     }
     case "repair": {

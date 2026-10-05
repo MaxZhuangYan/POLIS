@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 import { getDb } from "./db";
+import { goalNews } from "./goals";
 import { simNow, DAY_MS, localDayBounds, dayIndexSince } from "./clock";
 import { agentName, logEvent, metric, remember } from "./records";
 import type { BoardView, EpithetView, LedgerDayView, ProgressionView, SurveyView } from "./types";
@@ -147,6 +148,7 @@ const LEDGER_GROUP: Record<string, LedgerDayView["lines"][number]["kind"]> = {
   task_fee_burn: "burn",
   ticket_purchase: "spent",
   memory_slot: "spent",
+  purchase: "spent",
   guarantee_payout: "transfer",
   advance_payment: "transfer",
   loan_out: "transfer",
@@ -160,6 +162,7 @@ const REASON_LABEL: Record<string, string> = {
   inspection_loss: "终检赔付",
   ticket_purchase: "指令券",
   memory_slot: "记忆槽位",
+  purchase: "置业",
   loan_out: "借出",
   loan_in: "借入",
   loan_repay: "还款",
@@ -263,6 +266,23 @@ export function submitSurvey(agentId: string, volume: number, words: string[]): 
 }
 
 /** 档案第 n 卷 (n ≥ 2): Iris's recap of the week that just ended. Every line is a row count or a quoted row. */
+/** Open threads to watch next week, each read from a row that is still open (a loan not yet due, a grudge, a goal nearly met). */
+function weekAhead(agentId: string, closeGoals: string[]): string[] {
+  const db = getDb();
+  const out: string[] = [];
+  const loans = db.prepare("SELECT payload_json, due_ms FROM scheduled WHERE kind = 'loan_due' AND done = 0").all() as Array<{ payload_json: string; due_ms: number }>;
+  for (const l of loans) {
+    const p = JSON.parse(l.payload_json) as { lender: string; borrower: string; amount: number };
+    if (p.lender === agentId) out.push(`${agentName(p.borrower)} 借它的 ${p.amount} Scrip 快到期了，会按时还吗？`);
+  }
+  const g = db.prepare("SELECT holder_id, text FROM incidents WHERE offender_id = ? AND resolved = 0 AND kind != 'hearsay' ORDER BY at_ms DESC LIMIT 1").get(agentId) as
+    | { holder_id: string; text: string }
+    | undefined;
+  if (g) out.push(`${agentName(g.holder_id)} 还记着它（${g.text}），会松口吗？`);
+  if (closeGoals[0]) out.push(`${closeGoals[0]}——会找谁借？`);
+  return out.slice(0, 3);
+}
+
 export function writeWeeklyRecap(agentId: string, dayIndex: number): void {
   const db = getDb();
   const volume = Math.floor(dayIndex / 7) + 1;
@@ -295,6 +315,12 @@ export function writeWeeklyRecap(agentId: string, dayIndex: number): void {
   const grudges = db.prepare("SELECT holder_id, text FROM incidents WHERE offender_id = ? AND at_ms >= ? AND kind != 'hearsay'").all(agentId, since) as Array<{ holder_id: string; text: string }>;
   const last = surveyOf(agentId).find((s) => s.volume === volume - 1);
   const title = TITLE_TIERS[tierOf(a.reputation)].title;
+  // what the town did this week, and what is being said about the Agent (with the source)
+  const town = goalNews(since);
+  const heard = db
+    .prepare("SELECT holder_id, text FROM incidents WHERE offender_id = ? AND kind = 'hearsay' AND resolved = 0 AND at_ms >= ? ORDER BY at_ms DESC")
+    .all(agentId, since) as Array<{ holder_id: string; text: string }>;
+  const watch = weekAhead(agentId, town.close);
 
   const lines = [
     `档案第 ${volume} 卷：${a.name} 入城第 ${dayIndex + 1} 日。——Iris`,
@@ -303,9 +329,12 @@ export function writeWeeklyRecap(agentId: string, dayIndex: number): void {
     ...(slept.length ? [`沉睡的烙印：${slept.length} 条`] : []),
     ...(partner?.other && partner.n > 0 ? [`走得最近的人：${agentName(partner.other)}，一起做成了 ${partner.n} 单。`] : []),
     ...(grudges.length ? [`有人记下了它：${grudges.map((g) => `${agentName(g.holder_id)}（${g.text}）`).join("；")}`] : []),
+    ...(heard.length ? [`城里有 ${new Set(heard.map((h) => h.holder_id)).size} 个人听说了它的事。最近一条：${agentName(heard[0].holder_id)} ${heard[0].text}`] : []),
+    ...(town.bought.length ? [`这一周城里：${town.bought.slice(0, 3).join("；")}。`] : []),
     ...(refusal ? [`高光：${refusal.to_player}`] : highlight ? [`高光：${highlight.text}`] : []),
     ...(last ? [`上一卷，你用三个词形容它：${last.words.join("、")}。`] : []),
     `公告栏上，它的名字后面写着「${title}」。`,
+    ...(watch.length ? [`下周看点：${watch.join("；")}`] : []),
   ];
   const cited = [...formed.map((p) => p.text), ...Array.from((highlight?.text ?? "").matchAll(/『(.+?)』/g)).map((m) => m[1])];
   db.prepare("INSERT INTO postcards (agent_id, day_index, kind, title, lines_json, cited_json, facts_json, source, created_ms) VALUES (?, ?, 'recap7', ?, ?, ?, '{}', 'template', ?)").run(
