@@ -28,7 +28,8 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const LLM_RUN = process.env.SIM_LLM === "env" || !!process.env.SIM_LLM_URL;
 const POLICY = ["careful", "none"].includes(process.argv[2]) ? process.argv[2] : "bold";
 const DAYS = Number(process.argv[3] ?? 7);
-const PORT = 3000 + 60 + { bold: 1, careful: 2, none: 3 }[POLICY];
+// SIM_PORT lets two checkouts (e.g. an agent worktree) run the same policy at once
+const PORT = Number(process.env.SIM_PORT) || 3000 + 60 + { bold: 1, careful: 2, none: 3 }[POLICY];
 const BASE = `http://localhost:${PORT}`;
 const DB_PATH = path.join(mkdtempSync(path.join(os.tmpdir(), "polis-sim-")), "polis.db");
 
