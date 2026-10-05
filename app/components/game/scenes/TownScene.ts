@@ -498,6 +498,45 @@ export class TownScene extends Phaser.Scene implements TownApi {
     });
     // roofs, canopies, torii beams: above every resident, so residents walk behind them
     map.createLayer(MAP_ABOVE_LAYER, tileset, 0, 0)?.setDepth(DEPTH.above);
+    this.buildMapMargin(map, tileset);
+  }
+
+  /** The land goes on past the map edge. The HUD-safe camera bounds let the view slide beyond the map when the
+   *  Agent stands at an edge (so it is never hidden under a panel); there the player sees the town's ground,
+   *  darkened and fading out, instead of the empty void. */
+  private buildMapMargin(map: Phaser.Tilemaps.Tilemap, tileset: Phaser.Tilemaps.Tileset): void {
+    // the ground layer's commonest tile is what the town stands on
+    const counts = new Map<number, number>();
+    for (const row of map.getLayer("ground")?.data ?? []) for (const t of row) if (t.index > 0) counts.set(t.index, (counts.get(t.index) ?? 0) + 1);
+    const gid = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const at = gid !== undefined ? (tileset.getTileTextureCoordinates(gid) as { x: number; y: number } | null) : null;
+    if (!at) return;
+    const tex = this.textures.get(KEYS.tileset);
+    if (!tex.has("map-margin")) tex.add("map-margin", 0, at.x, at.y, 16, 16);
+    const M = 1024; // wider than any HUD inset at the smallest zoom
+    const { mapW: w, mapH: h } = this;
+    this.add
+      .tileSprite(-M, -M, w + 2 * M, h + 2 * M, KEYS.tileset, "map-margin")
+      .setOrigin(0, 0)
+      .setDepth(DEPTH.ground - 1)
+      .setTint(0x8a7060);
+    // a soft edge: the ground dims over FADE px, then stays dim
+    const FADE = 96;
+    const dim = Phaser.Display.Color.HexStringToColor(BG_COLOR).color;
+    const g = this.add.graphics().setDepth(DEPTH.ground - 0.5);
+    g.fillGradientStyle(dim, dim, dim, dim, 0.55, 0.55, 0, 0); // top strip: darker above, clear at the map edge
+    g.fillRect(-FADE, -FADE, w + 2 * FADE, FADE);
+    g.fillGradientStyle(dim, dim, dim, dim, 0, 0, 0.55, 0.55);
+    g.fillRect(-FADE, h, w + 2 * FADE, FADE);
+    g.fillGradientStyle(dim, dim, dim, dim, 0.55, 0, 0.55, 0);
+    g.fillRect(-FADE, 0, FADE, h);
+    g.fillGradientStyle(dim, dim, dim, dim, 0, 0.55, 0, 0.55);
+    g.fillRect(w, 0, FADE, h);
+    g.fillStyle(dim, 0.55);
+    g.fillRect(-M, -M, w + 2 * M, M - FADE);
+    g.fillRect(-M, h + FADE, w + 2 * M, M - FADE);
+    g.fillRect(-M, -FADE, M - FADE, h + 2 * FADE);
+    g.fillRect(w + FADE, -FADE, M - FADE, h + 2 * FADE);
   }
 
   // ───────────── textures ─────────────
