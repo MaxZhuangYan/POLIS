@@ -202,6 +202,19 @@ export interface PlayerView {
   /** 日结: newest day first */
   ledger: LedgerDayView[];
   survey: SurveyView;
+  /** 默契: a decision the Agent will make by itself within the hour — guess it first */
+  guess: GuessView | null;
+  attunement: { correct: number; total: number; last: { id: number; correct: boolean; guessed: string; actual: string; atMs: number } | null };
+}
+
+export interface GuessView {
+  id: number;
+  npc: string;
+  promptText: string;
+  origin: string;
+  options: Array<{ id: string; label: string }>;
+  dueMs: number;
+  guessed: string | null;
 }
 
 export interface EpithetView {

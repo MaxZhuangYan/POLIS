@@ -229,6 +229,26 @@ function createDb(): Database.Database {
       payload_json TEXT NOT NULL DEFAULT '{}',
       done INTEGER NOT NULL DEFAULT 0
     );
+
+    -- 默契 (lib/dilemmas.ts): a decision the Agent makes by itself an hour from now; the guardian may guess it first
+    CREATE TABLE IF NOT EXISTS guesses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      template_id TEXT NOT NULL,
+      npc TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      prompt_text TEXT NOT NULL,
+      options_json TEXT NOT NULL,
+      decided_option TEXT NOT NULL,
+      effect_json TEXT NOT NULL,
+      principle_id INTEGER,
+      principle_text TEXT,
+      guessed_option TEXT,
+      created_ms INTEGER NOT NULL,
+      due_ms INTEGER NOT NULL,
+      resolved_ms INTEGER,
+      correct INTEGER
+    );
   `);
 
   addColumns(db, "agents", [

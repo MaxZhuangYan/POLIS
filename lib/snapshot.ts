@@ -1,5 +1,6 @@
 import { getDb } from "./db";
 import { slotUsage } from "./imprints";
+import { guessView } from "./dilemmas";
 import { boardView, ledgerDays, progressionView, surveyView } from "./progression";
 import { simNow, getOffsetMs, isTestMode, worldTz, localParts, clockLabel, dayIndexSince, HOUR_MS, hourStart, nextLocalHour } from "./clock";
 import { NPC_BY_ID, NPCS } from "./content";
@@ -321,6 +322,10 @@ export function buildSnapshot(): GameSnapshot {
     progression: progressionView(pid),
     ledger: ledgerDays(pid),
     survey: surveyView(pid),
+    ...(() => {
+      const g = guessView(pid);
+      return { guess: g.pending, attunement: g.attunement };
+    })(),
   };
   snapshot.board = boardView(pid);
   return snapshot;

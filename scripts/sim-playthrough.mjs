@@ -146,6 +146,13 @@ async function main() {
         check(`choose ${m.templateId}`, r.status === 200, JSON.stringify(r.json).slice(0, 160));
         if (r.json.judgment) story.push(`   ↳ agent: ${r.json.judgment.decision} — ${r.json.judgment.to_player}`);
       }
+      if (p.guess && !p.guess.guessed) {
+        // 默契: the policy guesses what its Agent will do on its own
+        const g = p.guess.options[POLICY === "bold" ? 0 : p.guess.options.length - 1];
+        const r = await api("POST", `/api/guesses/${p.guess.id}`, { optionId: g.id });
+        check(`guess ${p.guess.id}`, r.status === 200, JSON.stringify(r.json).slice(0, 120));
+        story.push(`Day${p.dayIndex + 1} GUESS: ${p.guess.origin} → guessed 「${g.label}」`);
+      }
       if (p.pendingWavering) {
         story.push(`Day${p.dayIndex + 1} WAVERING: ${p.pendingWavering.promptText}`);
         await api("POST", `/api/wavering/${p.pendingWavering.id}/resolve`, { resolution: "reaffirm" });
@@ -213,6 +220,7 @@ async function main() {
     for (const d of dilemmas) console.log(` - ${d.npc} ${d.templateId} ${d.asked ? "asked the guardian" : `decided alone → ${d.choice}`}`);
     const sleeps = db.prepare("SELECT text FROM memories WHERE agent_id = ? AND kind = 'principle_dormant'").all(pid);
     console.log(`imprint slots: ${s.player.imprintSlots.used}/${s.player.imprintSlots.total} · went dormant: ${sleeps.length}`);
+    console.log(`默契: ${s.player.attunement.correct}/${s.player.attunement.total} guessed right`);
     console.log(`title: ${s.player.progression.title} (rep ${s.player.progression.reputation}) · epithets: ${s.player.progression.epithets.map((e) => `${e.label}(${e.why})`).join(" ") || "—"}`);
     console.log(`titles reached: ${ev("title_reached").map((t) => t.title).join(" → ") || "—"} · weekly volumes: ${db.prepare("SELECT COUNT(*) n FROM postcards WHERE kind = 'recap7'").get().n}`);
     const today = s.player.ledger[0];

@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { resolveGuess } from "./dilemmas";
 import { runSteps, runTaskHook, type Step } from "./consequences";
 import { simNow, HOUR_MS, worldTz, localParts } from "./clock";
 import { CHAIN_DELIVERY, LOCATION_NAMES, NPC_BY_ID, TEMPLATE_BY_ID, TASK_TEMPLATES, type TaskTemplate } from "./content";
@@ -416,6 +417,7 @@ export function processScheduled(): void {
       if (row.kind === "inspection") runInspection(payload as { taskId: number; agentId: string; receiver: string });
       else if (row.kind === "loan_due") runLoanDue(payload as { lender: string; borrower: string; amount: number });
       else if (row.kind === "steps") runSteps(String(payload.agentId), payload.steps as Step[]);
+      else if (row.kind === "self_decide") resolveGuess(Number(payload.guessId));
     } catch (err) {
       console.error("[scheduled] failed", row.kind, err);
     }

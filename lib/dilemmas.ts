@@ -18,11 +18,11 @@
 // ---------------------------------------------------------------------------
 
 import { getDb } from "./db";
-import { simNow, DAY_MS, localDayBounds } from "./clock";
+import { simNow, DAY_MS, HOUR_MS, localDayBounds } from "./clock";
 import { agentName, getRelationship, logEvent, metric, openIncidents, playerDayIndex, remember, say } from "./records";
 import { canAsk, canDecideAlone, insertMoment, optionForDir, applyEffect, type MomentOption, type MomentRow } from "./decisionMoments";
 import { logCitation } from "./principleEngine";
-import { createTask } from "./tasks";
+import { createTask, scheduleEvent } from "./tasks";
 import { TEMPLATE_BY_ID } from "./content";
 import type { Step } from "./consequences";
 import type { Domain } from "./types";
@@ -512,18 +512,128 @@ function fire(agentId: string, d: Dilemma): boolean {
     return true;
   }
 
-  // It knows what it thinks: decides by its imprint, and tells you tonight.
+  // It knows what it thinks. It settles the matter an hour from now by its imprint — the guardian may guess first (默契).
   d.setup?.();
   const p = sd.principle!;
   const choice = optionForDir(d.options, sd.dir);
-  const pseudo = { id: 0, template_id: d.templateId, context_json: "{}" } as unknown as MomentRow;
-  applyEffect(agentId, pseudo, choice.effect, { reason: `你说过『${p.text}』`, principleId: p.id });
-  logCitation(p.id, `${d.origin}：${choice.label}`, "neutral");
-  remember(agentId, "self_decided", `${d.origin}。这回我没等你——你说过『${p.text}』，我就「${choice.label}」了。`, { dilemma: d.templateId }, p.id);
-  say(agentId, `${choice.label}。`, "think");
-  logEvent({ kind: "moment", text: `${agentName(agentId)} 自己拿了主意：${d.origin}——「${choice.label}」`, actors: [agentId, d.npc], importance: 2 });
+  const now = simNow();
+  const due = now + HOUR_MS;
+  const db = getDb();
+  const res = db
+    .prepare(
+      `INSERT INTO guesses (agent_id, template_id, npc, origin, prompt_text, options_json, decided_option, effect_json, principle_id, principle_text, created_ms, due_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      agentId,
+      d.templateId,
+      d.npc,
+      d.origin,
+      d.promptText,
+      JSON.stringify(d.options.map((o) => ({ id: o.id, label: o.label }))),
+      choice.id,
+      JSON.stringify(choice.effect),
+      p.id,
+      p.text,
+      now,
+      due,
+    );
+  scheduleEvent(due, "self_decide", { guessId: Number(res.lastInsertRowid) });
+  say(agentId, "这件事，我心里有数。", "think");
+  logEvent({ kind: "moment", text: `${agentName(d.npc)} 来找 ${agentName(agentId)} 商量：${d.origin}。它说心里有数，一个小时后给答复`, actors: [agentId, d.npc], importance: 2 });
   metric("dilemma", { npc: d.npc, templateId: d.templateId, asked: false, choice: choice.id, principleId: p.id });
   return true;
+}
+
+interface GuessRow {
+  id: number;
+  agent_id: string;
+  template_id: string;
+  npc: string;
+  origin: string;
+  prompt_text: string;
+  options_json: string;
+  decided_option: string;
+  effect_json: string;
+  principle_id: number | null;
+  principle_text: string | null;
+  guessed_option: string | null;
+  created_ms: number;
+  due_ms: number;
+  resolved_ms: number | null;
+  correct: number | null;
+}
+
+export class GuessError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
+}
+
+/** The guardian's guess, before the Agent has said what it decided. */
+export function submitGuess(agentId: string, guessId: number, optionId: string): void {
+  const db = getDb();
+  const g = db.prepare("SELECT * FROM guesses WHERE id = ? AND agent_id = ?").get(guessId, agentId) as GuessRow | undefined;
+  if (!g) throw new GuessError("没有这件事", 404);
+  if (g.resolved_ms !== null) throw new GuessError("它已经拿定主意了", 409);
+  const options = JSON.parse(g.options_json) as Array<{ id: string; label: string }>;
+  if (!options.some((o) => o.id === optionId)) throw new GuessError("没有这个选项", 400);
+  db.prepare("UPDATE guesses SET guessed_option = ? WHERE id = ?").run(optionId, guessId);
+  metric("guess_submitted", { guessId, optionId });
+}
+
+/** Scheduled: the hour is up — the Agent acts on its imprint, and says whether the guardian read it right. */
+export function resolveGuess(guessId: number): void {
+  const db = getDb();
+  const g = db.prepare("SELECT * FROM guesses WHERE id = ?").get(guessId) as GuessRow | undefined;
+  if (!g || g.resolved_ms !== null) return;
+  const options = JSON.parse(g.options_json) as Array<{ id: string; label: string }>;
+  const label = (id: string | null) => options.find((o) => o.id === id)?.label ?? "";
+  const effect = JSON.parse(g.effect_json) as MomentOption["effect"];
+  const pseudo = { id: 0, template_id: g.template_id, context_json: "{}" } as unknown as MomentRow;
+  const quoted = g.principle_text ? `你说过『${g.principle_text}』` : null;
+  applyEffect(g.agent_id, pseudo, effect, { reason: quoted, principleId: g.principle_id });
+  if (g.principle_id) logCitation(g.principle_id, `${g.origin}：${label(g.decided_option)}`, "neutral");
+  const correct = g.guessed_option === null ? null : g.guessed_option === g.decided_option;
+  const tail = correct === null ? "" : correct ? "你猜对了。" : `你猜我会「${label(g.guessed_option)}」——这回不是。`;
+  remember(
+    g.agent_id,
+    "self_decided",
+    `${g.origin}。这回我没等你——${quoted ? `${quoted}，` : ""}我就「${label(g.decided_option)}」了。${tail}`,
+    { dilemma: g.template_id, guessId: g.id },
+    g.principle_id,
+  );
+  say(g.agent_id, `${label(g.decided_option)}。`, "think");
+  logEvent({ kind: "moment", text: `${agentName(g.agent_id)} 自己拿了主意：${g.origin}——「${label(g.decided_option)}」`, actors: [g.agent_id, g.npc], importance: 2 });
+  db.prepare("UPDATE guesses SET resolved_ms = ?, correct = ? WHERE id = ?").run(simNow(), correct === null ? null : correct ? 1 : 0, g.id);
+  metric("guess_resolved", { guessId: g.id, guessed: g.guessed_option !== null, correct });
+}
+
+export function guessView(agentId: string): {
+  pending: { id: number; npc: string; promptText: string; origin: string; options: Array<{ id: string; label: string }>; dueMs: number; guessed: string | null } | null;
+  attunement: { correct: number; total: number; last: { id: number; correct: boolean; guessed: string; actual: string; atMs: number } | null };
+} {
+  const db = getDb();
+  const p = db.prepare("SELECT * FROM guesses WHERE agent_id = ? AND resolved_ms IS NULL ORDER BY created_ms DESC LIMIT 1").get(agentId) as GuessRow | undefined;
+  const totals = db.prepare("SELECT COUNT(*) total, COALESCE(SUM(correct), 0) correct FROM guesses WHERE agent_id = ? AND correct IS NOT NULL").get(agentId) as {
+    total: number;
+    correct: number;
+  };
+  const last = db.prepare("SELECT * FROM guesses WHERE agent_id = ? AND correct IS NOT NULL ORDER BY resolved_ms DESC LIMIT 1").get(agentId) as GuessRow | undefined;
+  const lab = (g: GuessRow, id: string | null) => (JSON.parse(g.options_json) as Array<{ id: string; label: string }>).find((o) => o.id === id)?.label ?? "";
+  return {
+    pending: p
+      ? { id: p.id, npc: p.npc, promptText: p.prompt_text, origin: p.origin, options: JSON.parse(p.options_json), dueMs: p.due_ms, guessed: p.guessed_option }
+      : null,
+    attunement: {
+      correct: totals.correct,
+      total: totals.total,
+      last: last ? { id: last.id, correct: last.correct === 1, guessed: lab(last, last.guessed_option), actual: lab(last, last.decided_option), atMs: last.resolved_ms ?? last.due_ms } : null,
+    },
+  };
 }
 
 export const DILEMMA_TEMPLATES = Object.keys(BUILDERS).map((npc) => `DLM_${npc.toUpperCase()}`);

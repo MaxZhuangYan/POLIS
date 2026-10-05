@@ -553,7 +553,9 @@ export class MockGame {
       imprintSlots: { used: 3, total: 5, nextCost: 200 },
       progression: { title: "熟面孔", tier: 1, reputation: 26, nextTitle: "靠得住的人", nextAt: 35, hallCommissions: false, epithets: [] },
       ledger: [],
-      survey: { pendingVolume: null, history: [] }
+      survey: { pendingVolume: null, history: [] },
+      guess: null,
+      attunement: { correct: 0, total: 0, last: null }
     };
     const withWorld = (): PlayerView => ({
       ...base,
