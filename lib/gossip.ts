@@ -76,11 +76,27 @@ function factAbout(subject: string, speaker: string, listener: string): Fact | n
 
 const WRONG = /中途撤出|终检查出问题|到期没还/;
 
-function alreadyTold(key: string, listener: string): boolean {
-  const told = getDb()
-    .prepare("SELECT COUNT(*) n FROM metric_events WHERE name = 'gossip' AND json_extract(payload_json, '$.key') = ? AND json_extract(payload_json, '$.listener') = ?")
-    .get(key, listener) as { n: number };
-  return told.n > 0;
+/** The listener already heard this story — or told it themselves; a good word about the same person from the
+ *  same speaker is not repeated within five days. */
+function alreadyTold(fact: Fact, speaker: string, listener: string): boolean {
+  const db = getDb();
+  const told = db
+    .prepare(
+      `SELECT COUNT(*) n FROM metric_events WHERE name = 'gossip' AND json_extract(payload_json, '$.key') = ?
+         AND (json_extract(payload_json, '$.listener') = ? OR json_extract(payload_json, '$.speaker') = ?)`,
+    )
+    .get(fact.key, listener, listener) as { n: number };
+  if (told.n > 0) return true;
+  if (fact.tone > 0) {
+    const recent = db
+      .prepare(
+        `SELECT COUNT(*) n FROM metric_events WHERE name = 'gossip' AND at_ms >= ? AND json_extract(payload_json, '$.speaker') = ?
+           AND json_extract(payload_json, '$.listener') = ? AND json_extract(payload_json, '$.subject') = ?`,
+      )
+      .get(simNow() - 5 * DAY_MS, speaker, listener, fact.subject) as { n: number };
+    if (recent.n > 0) return true;
+  }
+  return false;
 }
 
 /** Pass a story on: the listener's opinion of the subject moves, and a bad story is kept as sourced hearsay. */
@@ -107,7 +123,7 @@ function tell(speaker: string, listener: string, fact: Fact, listenerIsAgent: bo
 export function gossipAbout(agentId: string, speaker: string, listener: string): boolean {
   if (speaker === agentId || listener === agentId) return false;
   const fact = factAbout(agentId, speaker, listener);
-  if (!fact || alreadyTold(fact.key, listener)) return false;
+  if (!fact || alreadyTold(fact, speaker, listener)) return false;
   tell(speaker, listener, fact, false);
   return true;
 }
@@ -117,7 +133,7 @@ export function gossipBetween(speaker: string, listener: string, candidates: str
   const pool = candidates.filter((c) => c !== speaker && c !== listener).sort(() => Math.random() - 0.5);
   for (const subject of pool) {
     const fact = factAbout(subject, speaker, listener);
-    if (!fact || alreadyTold(fact.key, listener)) continue;
+    if (!fact || alreadyTold(fact, speaker, listener)) continue;
     tell(speaker, listener, fact, listenerIsAgent);
     return true;
   }

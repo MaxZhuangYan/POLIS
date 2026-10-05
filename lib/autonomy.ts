@@ -171,10 +171,19 @@ function ruleJudge(agentId: string, moment: MomentRow, chosen: MomentOption, opt
 
   if (!conflict) {
     if (support) {
+      // it knows how often the two of them have agreed on this one before (judgments citing it), and says so
+      const agreed = (
+        db.prepare("SELECT COUNT(*) n FROM judgments WHERE agent_id = ? AND decision = 'execute' AND cited_principle_id = ?").get(agentId, support.id) as { n: number }
+      ).n;
       return {
         decision: "execute",
         cited: support,
-        toPlayer: `好。你说过『${support.text}』——正合我意。`,
+        toPlayer:
+          agreed === 0
+            ? `好。你说过『${support.text}』——正合我意。`
+            : agreed < 3
+              ? `好。『${support.text}』——这条我们想到一块儿了。`
+              : `好，还是『${support.text}』。这条我们已经一起用了 ${agreed + 1} 回。`,
         reasons: [`与原则『${support.text}』一致`],
         alt: null,
         source: "rules",
@@ -194,11 +203,21 @@ function ruleJudge(agentId: string, moment: MomentRow, chosen: MomentOption, opt
   const trustLine = `我对你的信任${trustWord(trust)}（${trust}/200）`;
 
   if (strong && refusalAllowed && preferred && !(trust >= 150 && ctx.urgent)) {
-    const facts = evidence.slice(0, 2).join("；");
+    // with no fact to point to, it says what it does have: it is not sure of the guardian right now
+    const facts = evidence.length ? evidence.slice(0, 2).join("；") : `最近我对你没那么有底（信任 ${trust}/200）`;
     const gamble = chosen.stance.domain === "risk" && chosen.stance.dir > 0;
+    // the same reason given before: it says so instead of repeating itself word for word
+    const before = (
+      db.prepare("SELECT COUNT(*) n FROM judgments WHERE agent_id = ? AND decision = 'refuse' AND instr(to_player, ?) > 0").get(agentId, evidence[0] ?? "\u0000") as { n: number }
+    ).n;
+    const tail = trust >= 120 ? "我知道你多半是对的，但这次……" : "";
     const toPlayer = ctx.bait && gamble
       ? `这单我建议不接。${facts}。你定过一条原则：『${conflict.text}』。当然……最终听你的。`
-      : `这次我想按自己的判断来：${facts}。你说过『${conflict.text}』——所以我打算「${preferred.label}」。${trust >= 120 ? "我知道你多半是对的，但这次……" : ""}`;
+      : before === 0
+        ? `这次我想按自己的判断来：${facts}。你说过『${conflict.text}』——所以我打算「${preferred.label}」。${tail}`
+        : before < 3
+          ? `还是那件事：${facts}。${before >= 2 ? `这话我跟你说过 ${before} 回了。` : ""}你说过『${conflict.text}』——所以这次我还是「${preferred.label}」。${tail}`
+          : `还是那件事：${evidence[0]}。这话我跟你说过 ${before} 回了——『${conflict.text}』，这次我还是「${preferred.label}」。`;
     return { decision: "refuse", cited: conflict, toPlayer, reasons: [...evidence, trustLine], alt: preferred.id, source: "rules", gate: "judged" };
   }
   if (hasAdjust && (strong || day >= 1)) {

@@ -6,7 +6,7 @@
 // quiet. A goal gives money somewhere to go, in character:
 //   * at noon a resident who can afford their goal buys it — real Scrip leaves their wallet (ledger `purchase`),
 //     the town sees it, they remember it;
-//   * one who is close (short by 10–60) may ask a friend for the difference — the ordinary loan path in sim.ts,
+//   * one who is close (short by 10–100) may ask a friend for the difference — the ordinary loan path in sim.ts,
 //     including the guardian's Agent (its fork names what the money is for), due in two days like any loan;
 //   * then the next, dearer goal.
 // Nothing here is a need bar: nobody suffers for not buying; it is what they choose to spend on.
@@ -19,17 +19,17 @@ import { adjustReputation, agentName, logEvent, metric, pay, remember, say } fro
 const GOALS: Record<string, string[]> = {
   mira: ["给北灯塔换一套新脚手架", "把市集的旧棚子翻修一遍", "给工地添一批好木料", "请人画一张新城区的图"],
   sol: ["盘下市集边上的小铺面", "进一批远方的货", "给铺子装一道好锁", "在码头租一个货位"],
-  tao: ["添一台新车床", "换一套好刨刀", "把工坊的炉子重砌一遍", "攒一批硬木料"],
+  tao: ["添一台新车床", "换一套好刨刀", "把工坊的炉子重砌一遍", "囤一批硬木料"],
   iris: ["印一卷新的城志", "给档案馆添两个书架", "买一批好纸和墨", "装订那几卷散档"],
   kade: ["修好议事厅的钟", "给调解室换几把椅子", "请人誊一份新的城约", "给议事厅换新门"],
-  nova: ["给搜救队添一套绳索和信号灯", "换一双能走远路的靴子", "修好那顶旧帐篷", "攒一批干粮和药"],
+  nova: ["给搜救队添一套绳索和信号灯", "换一双能走远路的靴子", "修好那顶旧帐篷", "备一批干粮和药"],
 };
 
 const BASE_PRICE = 240;
 const STEP = 120;
 /** shortest / longest gap a resident will ask a friend to cover */
 const MIN_GAP = 10;
-const MAX_GAP = 60;
+const MAX_GAP = 100;
 
 export interface Goal {
   npc: string;
@@ -85,7 +85,7 @@ export function goalLoanWant(npc: string, scrip: number, risk: number): { amount
   const gap = g.price - scrip;
   if (gap < MIN_GAP || gap > MAX_GAP) return null;
   // the bolder ones borrow; the careful ones would rather wait a day
-  if (Math.random() > 0.25 + 0.5 * risk) return null;
+  if (Math.random() > 0.4 + 0.5 * risk) return null;
   return { amount: gap, purpose: g.what };
 }
 
