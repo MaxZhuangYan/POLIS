@@ -15,6 +15,7 @@
     "test:sim": "node scripts/sim-playthrough.mjs"
   },
   "dependencies": {
+    "@fontsource/fusion-pixel-12px-proportional-sc": "^5.3.0",
     "better-sqlite3": "^12.11.1",
     "next": "^15.3.3",
     "phaser": "^3.90.0",
