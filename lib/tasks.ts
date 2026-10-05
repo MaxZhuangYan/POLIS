@@ -275,7 +275,8 @@ export function resolveTask(task: TaskRow): void {
       const text = other
         ? `和 ${agentName(other)} 一起在${loc}完成了${task.name}，分到 ${income} Scrip。`
         : `在${loc}完成了${task.name}，赚了 ${income} Scrip。`;
-      remember(m, "task_done", text, { taskId: task.id, income });
+      // Working together is what relationships grow from: it outranks routine jobs in the postcard.
+      remember(m, other ? "coop_done" : "task_done", text, { taskId: task.id, income });
       say(m, ok && task.mode === "routine" ? `${task.name}，做完了。` : `${task.name}，成了！`, "happy");
     }
     if (partner) {

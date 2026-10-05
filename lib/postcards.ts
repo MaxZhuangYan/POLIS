@@ -63,6 +63,7 @@ const KIND_PRIORITY: Record<string, number> = {
   loan: 5,
   declined: 5,
   coop: 4,
+  coop_done: 6,
   task_done: 3,
   grudge: 5,
   shortcut: 4,
@@ -78,7 +79,7 @@ function collectFacts(agentId: string, sinceMs: number, untilMs: number): Facts 
       "SELECT id, at_ms, kind, text, principle_id FROM memories WHERE agent_id = ? AND at_ms > ? AND at_ms <= ? AND kind NOT IN ('note_received','principle','guidance') ORDER BY at_ms",
     )
     .all(agentId, sinceMs, untilMs) as MemoryRow[];
-  const done = memories.filter((m) => m.kind === "task_done");
+  const done = memories.filter((m) => m.kind === "task_done" || m.kind === "coop_done");
   const failed = memories.filter((m) => m.kind === "task_failed");
   const income = done.reduce((s, m) => s + Number((m.text.match(/(\d+) Scrip/) ?? [0, 0])[1]), 0);
   const losses = failed.reduce((s, m) => s + Number((m.text.match(/(\d+) Scrip/) ?? [0, 0])[1]), 0);
