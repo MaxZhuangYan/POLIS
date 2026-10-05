@@ -178,7 +178,7 @@ function ruleJudge(agentId: string, moment: MomentRow, chosen: MomentOption, opt
   }
 
   const evidence = evidenceFor(agentId, moment, conflict);
-  if (forced && trust < 100) evidence.push(`你曾经强迫过我：『${forced.text}』`);
+  if (forced && trust < 100) evidence.push(`${forced.text}`);
   const day = playerDayIndex() ?? 0;
   const refusalAllowed = (day >= 2 && compliances(agentId) >= 2) || (ctx.bait === true && day >= 4);
   const preferred = options.find((o) => Math.sign(o.stance.dir) === Math.sign(conflict.stance_dir)) ?? null;

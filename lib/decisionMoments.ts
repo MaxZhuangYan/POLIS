@@ -494,7 +494,7 @@ export function repairMoment(agentId: string, npcId: string): number | null {
     type: "integrity",
     templateId: "REPAIR",
     speakerId: npcId,
-    promptText: `${agentName(npcId)} 不肯跟我合作了。TA 说：“${grudge}。”……我可以道歉、可以补偿 ${amount} Scrip，也可以就此算了。你怎么看？`,
+    promptText: `${agentName(npcId)} 不肯跟我合作了。TA 说：“你${grudge}。”……我可以道歉、可以补偿 ${amount} Scrip，也可以就此算了。你怎么看？`,
     facts: [`${agentName(npcId)} 记着的事：${grudge}`, `我和 TA 的熟悉度 ${getRelationship(agentId, npcId).familiarity}/100`],
     options: [
       { id: "A", label: "去道歉", fallbackPrinciple: "犯了错就认", stance: { domain: "integrity", dir: 1 }, effect: { kind: "repair", to: npcId, how: "apologize" } },

@@ -351,7 +351,9 @@ function blameMaker(delivery: TaskRow): void {
   const maker = parent.taken_by;
   const courier = delivery.taken_by;
   if (maker === courier) return;
-  recordIncident(courier, maker, "rushed_parts", `${agentName(maker)} 赶工做的零件在路上散了，我的${delivery.name}因此失败`);
+  // Incident texts describe what the offender did, without a subject, so they
+  // read correctly as "X 记着你：…" and as "上次 TA …".
+  recordIncident(courier, maker, "rushed_parts", `赶工做的零件在路上散了，害得我的「${delivery.name}」失败`);
   adjustRelationship(courier, maker, -12, "零件是赶工赶坏的");
   remember(courier, "grudge", `查明了：零件是 ${agentName(maker)} 赶工赶坏的。`, { maker });
   remember(maker, "consequence", `${agentName(courier)} 运送我赶制的零件失败了。${agentName(courier)} 说是我赶工的锅。`, { courier });

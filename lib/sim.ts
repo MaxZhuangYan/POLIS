@@ -599,7 +599,7 @@ function npcAnswersProposal(npcId: string, proposer: string, tpl: TaskTemplate):
   const t = traitsOf(npcId);
   const grudges = openIncidents(npcId, proposer);
   if (grudges.length > 0 && t.trust < 0.7) {
-    return { accept: false, why: `上次${grudges[0].text.replace(/^.*?[，,]/, "")}`.slice(0, 40), reason: `记着：${grudges[0].text}`, principle: null, grudge: true };
+    return { accept: false, why: `上次你${grudges[0].text}`.slice(0, 42), reason: `记着：${grudges[0].text}`, principle: null, grudge: true };
   }
   if (tpl.successRate < 0.8 && t.risk < 0.35) return { accept: false, why: "太险，我不去。", reason: "嫌风险太大", principle: null };
   const rec = getDb().prepare("SELECT record_defaults FROM agents WHERE id = ?").get(proposer) as { record_defaults: number };

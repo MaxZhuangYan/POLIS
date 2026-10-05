@@ -246,7 +246,7 @@ export function buildSnapshot(): GameSnapshot {
       db
         .prepare("SELECT text, at_ms, holder_id FROM incidents WHERE ((holder_id = ? AND offender_id = ?) OR (holder_id = ? AND offender_id = ?)) AND resolved = 0 ORDER BY at_ms DESC LIMIT 5")
         .all(pid, n.id, n.id, pid) as Array<{ text: string; at_ms: number; holder_id: string }>
-    ).map((i) => ({ text: i.holder_id === pid ? `我记着：${n.name} ${i.text}` : `${n.name} 记着：我${i.text}`, atMs: i.at_ms }));
+    ).map((i) => ({ text: i.holder_id === pid ? `我记着：${n.name} ${i.text}` : `${n.name} 记着你：${i.text}`, atMs: i.at_ms }));
     return {
       otherId: n.id,
       familiarity: Math.round((rel.familiarity + theirs.familiarity) / 2),

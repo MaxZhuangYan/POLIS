@@ -150,7 +150,7 @@ export const SEED_RELATIONS: Array<{ a: string; b: string; familiarity: number }
   { a: "tao", b: "mira", familiarity: 30 },
 ];
 export const SEED_INCIDENTS: Array<{ holder: string; offender: string; text: string; daysAgo: number }> = [
-  { holder: "sol", offender: "nova", text: "Nova 中途撤出一单押运，货滞留了一夜", daysAgo: 12 },
+  { holder: "sol", offender: "nova", text: "中途撤出一单押运，货滞留了一夜", daysAgo: 12 },
 ];
 
 export const LOCATION_NAMES: Record<LocationId, string> = {
