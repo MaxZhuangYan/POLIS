@@ -212,9 +212,20 @@ export interface WorldView {
   llm: { mode: "llm" | "offline"; label: string };
 }
 
+// Directed edge of the town's social web (any resident ↔ any resident):
+// how well `from` knows `to`, and the grudge `from` still holds, if any.
+export interface TownRelationView {
+  from: string;
+  to: string;
+  familiarity: number;
+  coopDone: number;
+  grudge: string | null;
+}
+
 export interface GameSnapshot {
   world: WorldView;
   agents: AgentView[];
   feed: FeedItem[];
   player: PlayerView | null;
+  townRelations?: TownRelationView[];
 }

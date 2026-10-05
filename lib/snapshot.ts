@@ -21,6 +21,7 @@ import type {
   PostcardView,
   PrincipleView,
   RelationshipView,
+  TownRelationView,
 } from "./types";
 
 // Builds the one read model the client renders. Pure reads.
@@ -132,6 +133,26 @@ function judgmentView(j: JudgmentRow, scrip: number): JudgmentView {
   };
 }
 
+function townRelations(): TownRelationView[] {
+  const db = getDb();
+  const rels = db
+    .prepare("SELECT agent_id, other_id, familiarity, coop_done FROM relationships WHERE familiarity > 0 OR coop_done > 0")
+    .all() as Array<{ agent_id: string; other_id: string; familiarity: number; coop_done: number }>;
+  const grudges = db
+    .prepare("SELECT holder_id, offender_id, text FROM incidents WHERE resolved = 0 ORDER BY at_ms DESC")
+    .all() as Array<{ holder_id: string; offender_id: string; text: string }>;
+  const key = (a: string, b: string) => `${a}→${b}`;
+  const out = new Map<string, TownRelationView>();
+  for (const r of rels) out.set(key(r.agent_id, r.other_id), { from: r.agent_id, to: r.other_id, familiarity: r.familiarity, coopDone: r.coop_done, grudge: null });
+  for (const g of grudges) {
+    const k = key(g.holder_id, g.offender_id);
+    const cur = out.get(k) ?? { from: g.holder_id, to: g.offender_id, familiarity: 0, coopDone: 0, grudge: null };
+    if (!cur.grudge) cur.grudge = g.text;
+    out.set(k, cur);
+  }
+  return [...out.values()];
+}
+
 export function buildSnapshot(): GameSnapshot {
   const db = getDb();
   const now = simNow();
@@ -179,6 +200,7 @@ export function buildSnapshot(): GameSnapshot {
     agents,
     feed,
     player: null,
+    townRelations: townRelations(),
   };
   if (!player || !pid) return snapshot;
 
