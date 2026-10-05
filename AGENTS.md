@@ -67,15 +67,20 @@ npm run typecheck && npm run lint
 npm run test:choose-bugs  # 选择路由的回归（临时库，离线）
 npm run test:pathfinding  # 路网
 npm run map:check         # 地图校验（doc/MAPS.md）
-npm run test:sim -- careful 7     # 无界面整局模拟；bold | careful；SIM_LLM=env 用 .env.local 里的模型；SIM_KEEP_DB=1 保留存档
+npm run test:sim -- careful 7     # 无界面整局模拟；bold | careful | none（不干预对照）；≥14 天附长线报告；
+                                  # SIM_LLM=env 用 .env.local 里的模型；SIM_KEEP_DB=1 保留存档；SIM_PORT 换端口
 node scripts/llm-report.mjs <db>  # 模型调用、校验门、模型 vs 兜底占比
+node scripts/causal-chains.mjs <db>  # 存档里的因果链（过错 → 传闻 → 后果；借款 → 置业 → 还/赖），每环带 表#id
 npm run playtest:new      # 真浏览器：新玩家第一局
 npm run playtest:week -- bold 9   # 真浏览器：一周多，所有动词和长线面板
+npm run playtest:sizes    # 真浏览器：同一存档、每个面板，1280 / 1440 / 390 / 360
+npm run playtest:record   # 录屏：正常速度 + 标注的测试快进（playtest-output/record/desktop.webm）
+# 任何 playtest 前加 PLAYTEST_PROD=1 → 先 next build 再 next start；PLAYTEST_TAG=before → 输出到 <name>-before
 npm run scenario -- d5-bait       # 造一个停在某个剧情节点的存档：fresh | d1-forks | d2-morning | d5-bait | week2
 npm run build             # 生产构建
 ```
 
-**测试梯子**：改了逻辑至少跑 `npm test`；改了 UI 跑 `npm run playtest:new` 并**看截图**（`playtest-output/<name>/`）；改了节奏 / 内容跑 `test:sim` 的 bold 和 careful 各 7–14 天，读 STORY 段落是否通顺、是否和数据一致。
+**测试梯子**：改了逻辑至少跑 `npm test`；改了 UI 跑 `npm run playtest:new` 并**看截图**（`playtest-output/<name>/`）；改了节奏 / 内容跑 `test:sim` 的 bold 和 careful 各 7–14 天，读 STORY 段落是否通顺、是否和数据一致；改了经济 / 社会机制跑 `none 28`（不干预对照）看长线报告，再用 `causal-chains.mjs` 确认链条是真的连上了。
 
 ## 配方
 
