@@ -131,7 +131,11 @@ function evidenceFor(agentId: string, moment: MomentRow, principle: PrincipleRow
     const passed = db
       .prepare("SELECT COUNT(*) n FROM memories WHERE agent_id = ? AND text LIKE '%过了终检%'")
       .get(agentId) as { n: number };
-    if (passed.n > 0) out.push(`我提前标记送达 ${passed.n} 次都过了终检`);
+    const caught = db.prepare("SELECT COUNT(*) n FROM incidents WHERE offender_id = ? AND kind = 'shortcut'").get(agentId) as { n: number };
+    // the whole record, not the flattering half: having been caught as often as not, it has no case for shortcuts
+    if (passed.n > caught.n) {
+      out.push(caught.n > 0 ? `我提前标记送达 ${passed.n} 次过了终检，只被查出过 ${caught.n} 次` : `我提前标记送达 ${passed.n} 次都过了终检`);
+    }
   }
   return out;
 }
@@ -411,7 +415,9 @@ export function resolveJudgment(id: number, action: "accept" | "force" | "adopt"
     pay(agentId, -FORCE_TICKET_COST, "ticket_purchase");
     const applied = changeTrust(agentId, -10, "强制执行");
     const situation = (parseContext(moment).origin as string | undefined) ?? moment.prompt_text.slice(0, 16);
-    const text = Array.from(`你曾在「${situation}」时强迫我`).slice(0, 24).join("");
+    // keep the sentence whole: shorten the situation, never the "强迫我"
+    const sit = Array.from(situation);
+    const text = `你曾在「${sit.length > 16 ? `${sit.slice(0, 15).join("")}…` : situation}」时强迫我`;
     db.prepare(
       `INSERT INTO principles (agent_id, text, domain, weight, source_decision_id, source, last_cited_at, last_decayed_at, created_at, origin_text, stance_dir)
        VALUES (?, ?, 'trust', 1.0, ?, 'forced', NULL, ?, ?, ?, 0)`,
