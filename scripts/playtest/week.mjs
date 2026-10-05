@@ -11,7 +11,7 @@
 //
 // Policies: bold takes the first option / forces refusals / guesses the first option; careful the last / respects.
 
-import { btn, clickBtn, dismissCoach, escapeRe, horizontalOverflow, isVisible, passTitle, pressEscape, runPlaytest, sec } from "./lib.mjs";
+import { btn, clearModals, clickBtn, dismissCoach, escapeRe, horizontalOverflow, isVisible, passTitle, pressEscape, runPlaytest, sec } from "./lib.mjs";
 
 const POLICY = process.argv[2] === "careful" ? "careful" : "bold";
 const DAYS = Math.max(8, Number(process.argv[3] ?? 9));
@@ -59,7 +59,8 @@ const { ok } = await runPlaytest("week", { title: `${DAYS} days, ${POLICY} guard
         // the fork may already be on screen (the list stays open after an answer); otherwise open it from the dock
         const optBtn = btn(page, new RegExp(`^${escapeRe(pick(m.options).label)}$`));
         if (!(await optBtn.isVisible().catch(() => false))) {
-          if (await page.getByRole("dialog").first().isVisible().catch(() => false)) await pressEscape(page);
+          const stuck = await clearModals(page);
+          t.check("every modal closes with Esc or its own button", stuck === null, String(stuck).slice(0, 80));
           await page.locator('[data-coach="decisions"]').click();
           await page.waitForTimeout(700);
         }

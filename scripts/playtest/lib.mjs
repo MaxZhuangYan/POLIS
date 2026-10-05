@@ -329,6 +329,27 @@ export async function pressEscape(page) {
   await page.waitForTimeout(300);
 }
 
+/**
+ * Close whatever modal is up (a dialog, a title-reached card, a result card…) the way a player would:
+ * Esc first, then its own close / acknowledge button. Returns what was still open if nothing closed it
+ * (the caller decides whether that is a problem worth a check).
+ */
+export async function clearModals(page, { tap = false } = {}) {
+  const open = () => page.locator('[role="dialog"], [aria-modal="true"], [class*="backdrop"]').first().isVisible().catch(() => false);
+  for (let i = 0; i < 4 && (await open()); i++) {
+    await pressEscape(page);
+    if (!(await open())) break;
+    const close = btn(page, /^(关闭|知道了|好|好的|收下|继续|✕|×)$/);
+    if (await close.isVisible().catch(() => false)) {
+      if (tap) await close.tap().catch(() => undefined);
+      else await close.click().catch(() => undefined);
+      await page.waitForTimeout(400);
+    }
+  }
+  if (!(await open())) return null;
+  return page.locator('[role="dialog"], [aria-modal="true"], [class*="backdrop"]').first().innerText().catch(() => "?");
+}
+
 /** no horizontal page scroll: the document is never wider than the viewport */
 export async function horizontalOverflow(page) {
   return page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
