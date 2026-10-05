@@ -1,4 +1,6 @@
 import { getDb } from "./db";
+import { slotUsage } from "./imprints";
+import { boardView, ledgerDays, progressionView, surveyView } from "./progression";
 import { simNow, getOffsetMs, isTestMode, worldTz, localParts, clockLabel, dayIndexSince, HOUR_MS, hourStart, nextLocalHour } from "./clock";
 import { NPC_BY_ID, NPCS } from "./content";
 import { getRelationship, playerId } from "./records";
@@ -315,6 +317,11 @@ export function buildSnapshot(): GameSnapshot {
     onboarding: (player.onboarding as "forks" | "imprint" | "done") ?? "done",
     stats: { tasksDone: doneCount, scripDelta: player.scrip - 100, reputationDelta: player.reputation - 20 },
     nextPostcardAtMs: nextLocalHour(23, now - 1, tz),
+    imprintSlots: slotUsage(pid),
+    progression: progressionView(pid),
+    ledger: ledgerDays(pid),
+    survey: surveyView(pid),
   };
+  snapshot.board = boardView(pid);
   return snapshot;
 }

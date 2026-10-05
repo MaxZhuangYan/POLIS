@@ -549,7 +549,11 @@ export class MockGame {
       distilling: 0,
       onboarding: "done",
       stats: { tasksDone: 4, scripDelta: 36, reputationDelta: 6 },
-      nextPostcardAtMs: this.nextNight()
+      nextPostcardAtMs: this.nextNight(),
+      imprintSlots: { used: 3, total: 5, nextCost: 200 },
+      progression: { title: "熟面孔", tier: 1, reputation: 26, nextTitle: "靠得住的人", nextAt: 35, hallCommissions: false, epithets: [] },
+      ledger: [],
+      survey: { pendingVolume: null, history: [] }
     };
     const withWorld = (): PlayerView => ({
       ...base,

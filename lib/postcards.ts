@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { writeWeeklyRecap } from "./progression";
 import { simNow, dayIndexSince, HOUR_MS } from "./clock";
 import { LOCATION_NAMES, START_SCRIP } from "./content";
 import { logEvent, metric } from "./records";
@@ -225,6 +226,7 @@ export function writeNightlyPostcard(agentId: string): number | null {
   });
 
   if (facts.dayIndex === 6) writeRecap7(agentId);
+  else if (facts.dayIndex > 6 && facts.dayIndex % 7 === 6) writeWeeklyRecap(agentId, facts.dayIndex);
   return postcardId;
 }
 

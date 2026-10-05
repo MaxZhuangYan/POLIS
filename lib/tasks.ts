@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { runSteps, runTaskHook, type Step } from "./consequences";
 import { simNow, HOUR_MS, worldTz, localParts } from "./clock";
 import { CHAIN_DELIVERY, LOCATION_NAMES, NPC_BY_ID, TEMPLATE_BY_ID, TASK_TEMPLATES, type TaskTemplate } from "./content";
 import {
@@ -64,6 +65,11 @@ export interface TaskMeta {
   conditional?: boolean; // "先完成她那一半"
   lossOnFail?: number;
   lossLabel?: string;
+  // consequences as data (lib/consequences.ts): run when the job ends this way, for `stepsAgent`
+  onSuccess?: Step[];
+  onFail?: Step[];
+  onDefault?: Step[];
+  stepsAgent?: string;
 }
 
 // The walk is presentation (v1.5 §3.5: tick 是逻辑单位，不是渲染单位): long
@@ -148,8 +154,13 @@ export function restockBoard(): void {
   const counts = { routine: 0, skilled: 0, coop: 0 } as Record<string, number>;
   for (const t of open) counts[t.mode] = (counts[t.mode] ?? 0) + 1;
   const pool: TaskTemplate[] = [];
+  const topRep = (db.prepare("SELECT MAX(reputation) r FROM agents").get() as { r: number | null }).r ?? 0;
   for (const tpl of TASK_TEMPLATES) {
-    const weight = tpl.mode === "routine" ? 5 : tpl.mode === "skilled" ? (counts.skilled < 3 ? 3 : 1) : counts.coop < 2 ? 2 : 0;
+    if (tpl.minRep !== undefined) {
+      // a gated job is posted only while someone in town may take it, and at most one at a time
+      if (topRep < tpl.minRep || open.some((t) => t.template_id === tpl.id)) continue;
+    }
+    const weight = tpl.minRep !== undefined ? 2 : tpl.mode === "routine" ? 5 : tpl.mode === "skilled" ? (counts.skilled < 3 ? 3 : 1) : counts.coop < 2 ? 2 : 0;
     for (let i = 0; i < weight; i++) pool.push(tpl);
   }
   for (let i = open.length; i < want && pool.length > 0; i++) {
@@ -279,9 +290,8 @@ export function resolveTask(task: TaskRow): void {
       if (task.mode !== "routine") adjustReputation(m, 1);
       if (task.giver && task.giver !== m) adjustRelationship(m, task.giver, 2, null);
       const other = members.find((x) => x !== m);
-      const text = other
-        ? `和 ${agentName(other)} 一起在${loc}完成了${named}，分到 ${income} Scrip。`
-        : `在${loc}完成了${named}，赚了 ${income} Scrip。`;
+      const earned = income > 0 ? (other ? `，分到 ${income} Scrip` : `，赚了 ${income} Scrip`) : "";
+      const text = other ? `和 ${agentName(other)} 一起在${loc}完成了${named}${earned}。` : `在${loc}完成了${named}${earned}。`;
       // Working together is what relationships grow from: it outranks routine jobs in the postcard.
       remember(m, other ? "coop_done" : "task_done", text, { taskId: task.id, income });
       say(m, ok && task.mode === "routine" ? `${task.name}，做完了。` : `${task.name}，成了！`, "happy");
@@ -308,6 +318,7 @@ export function resolveTask(task: TaskRow): void {
       }
     }
     if (task.template_id === "pr-order") spawnChainDelivery(task);
+    runTaskHook(meta, "onSuccess", owner);
   } else {
     const loss = meta.lossOnFail ?? (task.success_rate <= RISKY && task.mode !== "coop" ? 8 : 0);
     const lossWord = meta.lossLabel ?? "补给";
@@ -332,6 +343,7 @@ export function resolveTask(task: TaskRow): void {
     });
     settleCitations(task, "negative", `「${task.name}」失败${loss > 0 ? `，赔了 ${loss} Scrip` : ""}`);
     if (task.mode === "chain" && task.chain_parent_id) blameMaker(task);
+    runTaskHook(meta, "onFail", owner);
   }
   metric("task_settled", { taskId: task.id, ok, template: task.template_id, members });
 }
@@ -403,6 +415,7 @@ export function processScheduled(): void {
     try {
       if (row.kind === "inspection") runInspection(payload as { taskId: number; agentId: string; receiver: string });
       else if (row.kind === "loan_due") runLoanDue(payload as { lender: string; borrower: string; amount: number });
+      else if (row.kind === "steps") runSteps(String(payload.agentId), payload.steps as Step[]);
     } catch (err) {
       console.error("[scheduled] failed", row.kind, err);
     }
@@ -499,6 +512,7 @@ export function defaultOnCoop(defaulter: string, coop: TaskRow, betterTaskName: 
     importance: 3,
   });
   say(victim, `……${agentName(defaulter)} 走了？`, "upset");
+  runTaskHook(taskMeta(coop), "onDefault", victim);
 }
 
 export function hourNow(): number {

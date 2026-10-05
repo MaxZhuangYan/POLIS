@@ -47,6 +47,8 @@ import {
   type PlanItem,
 } from "./decisionMoments";
 import { maybeRunDistillationBatch } from "./distillation";
+import { maybeDilemma } from "./dilemmas";
+import { checkTitle } from "./progression";
 import { llmAvailable } from "./llm";
 import { activeDirective } from "./notes";
 import { writeNightlyPostcard } from "./postcards";
@@ -178,6 +180,8 @@ export function runTick(tickMs: number): void {
       ensureD3Risk(pid);
       ensureD5Bait(pid);
       miraRevisit(pid, hour);
+      maybeDilemma(pid, hour);
+      checkTitle(pid);
       if (hour === 23) writeNightlyPostcard(pid);
     }
     if (hour === 4) decayPrinciples();
@@ -377,7 +381,9 @@ function scoreTask(a: AgentRow, t: Traits, task: TaskRow): number {
 function chooseWork(agentId: string): boolean {
   const a = getAgent(agentId);
   const t = traitsOf(agentId);
-  const tasks = openTasks().filter((x) => x.mode !== "chain" || x.receiver_id !== agentId);
+  const tasks = openTasks().filter(
+    (x) => (x.mode !== "chain" || x.receiver_id !== agentId) && (TEMPLATE_BY_ID[x.template_id ?? ""]?.minRep ?? 0) <= a.reputation,
+  );
   if (tasks.length === 0) return false;
   const ranked = tasks.map((task) => ({ task, s: scoreTask(a, t, task) })).sort((x, y) => y.s - x.s);
 

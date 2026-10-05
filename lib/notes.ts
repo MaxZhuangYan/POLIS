@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { enforceSlots } from "./imprints";
 import { simNow, DAY_MS, localDayBounds } from "./clock";
 import { NOTES_PER_DAY } from "./content";
 import { logEvent, metric, remember } from "./records";
@@ -157,7 +158,8 @@ export function answerNotes(agentId: string, postcardId: number, mood: string): 
       const now = simNow();
       const same = db.prepare("SELECT id FROM principles WHERE agent_id = ? AND text = ?").get(agentId, ptext) as { id: number } | undefined;
       if (same) {
-        db.prepare("UPDATE principles SET weight = MIN(1.0, weight + 0.2), last_cited_at = ? WHERE id = ?").run(now, same.id);
+        db.prepare("UPDATE principles SET weight = MAX(0.5, MIN(1.0, weight + 0.2)), last_cited_at = ? WHERE id = ?").run(now, same.id);
+        enforceSlots(agentId, same.id);
         db.prepare("UPDATE notes SET principle_id = ? WHERE id = ?").run(same.id, note.id);
         reply = `你又说了一次『${note.text}』。我记着呢。`;
         cited.push(ptext);
@@ -174,6 +176,7 @@ export function answerNotes(agentId: string, postcardId: number, mood: string): 
           .run(agentId, ptext, d?.domain ?? "integrity", now, now, "你的一句留言", d?.dir ?? 0).lastInsertRowid,
       );
       db.prepare("UPDATE notes SET principle_id = ? WHERE id = ?").run(pid, note.id);
+      enforceSlots(agentId, pid);
       reply = `你说『${note.text}』。我把它记成了一条原则。`;
       cited.push(ptext);
     }

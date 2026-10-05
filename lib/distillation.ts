@@ -3,6 +3,7 @@ import { getDb } from "./db";
 import { simNow } from "./clock";
 import { chat, llmAvailable } from "./llm";
 import { metric, remember, logEvent } from "./records";
+import { enforceSlots } from "./imprints";
 
 // ---------------------------------------------------------------------------
 // Distillation pipeline (Phase 2).
@@ -309,7 +310,7 @@ async function distillOne(db: Database.Database, row: DecidedMomentRow): Promise
     source = "llm";
   } else {
     text = option.fallbackPrinciple;
-    domain = type;
+    domain = option.stance?.domain ?? type;
     source = "fallback";
   }
   const stanceDir = option.stance?.dir ?? 0;
@@ -326,6 +327,7 @@ async function distillOne(db: Database.Database, row: DecidedMomentRow): Promise
       return true;
     })();
     if (!done) return;
+    enforceSlots(row.agent_id, twin.id);
     metric("distillation", { decisionId: row.id, source, llmReachable: useLlm, reinforced: twin.id });
     remember(row.agent_id, "principle", `你又一次这样选了。『${twin.text}』，我记得更牢了。`, { decisionId: row.id }, twin.id);
     logEvent({
@@ -356,6 +358,7 @@ async function distillOne(db: Database.Database, row: DecidedMomentRow): Promise
       });
     const principleId = Number(res.lastInsertRowid);
     metric("distillation", { decisionId: row.id, source, llmReachable: useLlm });
+    enforceSlots(row.agent_id, principleId);
     remember(row.agent_id, "principle", `我记下了一条原则：『${text}』`, { decisionId: row.id }, principleId);
     logEvent({
       kind: "principle",

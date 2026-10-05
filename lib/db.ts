@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import fs from "node:fs";
 import path from "node:path";
 import { NPCS, SEED_INCIDENTS, SEED_RELATIONS } from "./content";
 
@@ -17,7 +18,7 @@ function addColumns(db: Database.Database, table: string, cols: Array<[string, s
 }
 
 function createDb(): Database.Database {
-  const dbPath = process.env.POLIS_DB_PATH || path.join(process.cwd(), "polis.db");
+  const dbPath = dbPathFromEnv();
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("busy_timeout = 3000");
@@ -257,6 +258,12 @@ function createDb(): Database.Database {
     ["record_defaults", "INTEGER NOT NULL DEFAULT 0"],
     ["onboarding", "TEXT NOT NULL DEFAULT 'done'"],
     ["last_postcard_ms", "INTEGER"],
+      // 记忆槽位 (lib/imprints.ts): live imprints the Agent can hold
+    ["memory_slots", "INTEGER NOT NULL DEFAULT 5"],
+    // three words the guardian used for its Agent at each weekly recap (lib/progression.ts)
+    ["survey_json", "TEXT NOT NULL DEFAULT '[]'"],
+    // highest reputation title reached (so a tier-up is announced once)
+    ["title_tier", "INTEGER NOT NULL DEFAULT 0"],
   ]);
 
   addColumns(db, "world_state", [
@@ -286,6 +293,11 @@ function createDb(): Database.Database {
     ["principle_id", "INTEGER"],
     ["receiver_id", "TEXT"],
     ["meta_json", "TEXT NOT NULL DEFAULT '{}'"],
+  ]);
+
+  addColumns(db, "ledger", [
+    // wall-clock of the entry (sim time), for the daily ledger (日结); rows written before this column are skipped there
+    ["at_ms", "INTEGER"],
   ]);
 
   addColumns(db, "decision_moments", [
@@ -396,6 +408,28 @@ function seedNpcs(db: Database.Database) {
 declare global {
   // eslint-disable-next-line no-var
   var __polisDb: Database.Database | undefined;
+}
+
+function dbPathFromEnv(): string {
+  return process.env.POLIS_DB_PATH || path.join(process.cwd(), "polis.db");
+}
+
+/** 新的存档: close the current save, keep it as <file>.bak (one generation), and start an empty world. */
+export function resetSave(): { backup: string } {
+  const dbPath = dbPathFromEnv();
+  try {
+    globalThis.__polisDb?.close();
+  } catch {
+    /* already closed */
+  }
+  globalThis.__polisDb = undefined;
+  const backup = `${dbPath}.bak`;
+  for (const suf of ["", "-wal", "-shm"]) {
+    if (fs.existsSync(backup + suf)) fs.rmSync(backup + suf);
+    if (fs.existsSync(dbPath + suf)) fs.renameSync(dbPath + suf, backup + suf);
+  }
+  getDb();
+  return { backup };
 }
 
 export function getDb(): Database.Database {

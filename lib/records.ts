@@ -151,11 +151,12 @@ export function openIncidents(holderId: string, offenderId: string): IncidentRow
 export function pay(agentId: string, amount: number, reason: string): void {
   const db = getDb();
   db.prepare("UPDATE agents SET scrip = MAX(0, scrip + ?) WHERE id = ?").run(amount, agentId);
-  db.prepare("INSERT INTO ledger (agent_id, amount, reason, tick) VALUES (?, ?, ?, ?)").run(
+  db.prepare("INSERT INTO ledger (agent_id, amount, reason, tick, at_ms) VALUES (?, ?, ?, ?, ?)").run(
     agentId,
     amount,
     reason,
     currentTick(),
+    simNow(),
   );
 }
 
@@ -166,14 +167,21 @@ export function payReward(agentId: string, gross: number): number {
   pay(agentId, income, "task_reward");
   if (burn > 0) {
     getDb()
-      .prepare("INSERT INTO ledger (agent_id, amount, reason, tick) VALUES (?, ?, 'task_fee_burn', ?)")
-      .run(agentId, -burn, currentTick());
+      .prepare("INSERT INTO ledger (agent_id, amount, reason, tick, at_ms) VALUES (?, ?, 'task_fee_burn', ?, ?)")
+      .run(agentId, -burn, currentTick(), simNow());
   }
   return income;
 }
 
 export function adjustReputation(agentId: string, delta: number): void {
-  getDb().prepare("UPDATE agents SET reputation = MAX(0, MIN(100, reputation + ?)) WHERE id = ?").run(delta, agentId);
+  const db = getDb();
+  const before = db.prepare("SELECT reputation, is_player FROM agents WHERE id = ?").get(agentId) as { reputation: number; is_player: number } | undefined;
+  db.prepare("UPDATE agents SET reputation = MAX(0, MIN(100, reputation + ?)) WHERE id = ?").run(delta, agentId);
+  // the guardian's Agent keeps a reputation trail for the daily ledger (日结)
+  if (before?.is_player) {
+    const after = Math.max(0, Math.min(100, before.reputation + delta));
+    if (after !== before.reputation) metric("reputation", { agentId, delta: after - before.reputation, value: after });
+  }
 }
 
 // --- Trust (player ↔ Agent, 0..200) ------------------------------------------------

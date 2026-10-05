@@ -196,6 +196,53 @@ export interface PlayerView {
   onboarding: "forks" | "imprint" | "done";
   stats: { tasksDone: number; scripDelta: number; reputationDelta: number };
   nextPostcardAtMs: number;
+  /** 记忆槽位: live shaped imprints / slots; nextCost = Scrip for one more slot (null at the cap) */
+  imprintSlots: { used: number; total: number; nextCost: number | null };
+  progression: ProgressionView;
+  /** 日结: newest day first */
+  ledger: LedgerDayView[];
+  survey: SurveyView;
+}
+
+export interface EpithetView {
+  label: string; // 守约的 / 敢闯的 …
+  why: string; // the fact behind it
+}
+
+export interface ProgressionView {
+  title: string;
+  tier: number;
+  reputation: number;
+  nextTitle: string | null;
+  nextAt: number | null;
+  hallCommissions: boolean;
+  epithets: EpithetView[];
+}
+
+export interface BoardView {
+  week: number;
+  ranks: Array<{ id: string; name: string; title: string; reputation: number; weekDone: number; done: number; defaults: number; isPlayer: boolean }>;
+  notices: Array<{ atMs: number; text: string }>;
+  youRank: number | null;
+}
+
+export interface LedgerDayView {
+  dayIndex: number;
+  startMs: number;
+  lines: Array<{ kind: "income" | "loss" | "burn" | "spent" | "transfer"; reason: string; label: string; amount: number; count: number }>;
+  net: number;
+  tasksDone: number;
+  tasksFailed: number;
+  reputationDelta: number;
+  trustDelta: number;
+  imprints: string[];
+  citations: number;
+}
+
+export interface SurveyView {
+  /** a weekly volume the guardian has read but not yet described in three words */
+  pendingVolume: number | null;
+  history: Array<{ volume: number; words: string[] }>;
 }
 
 export interface WorldView {
@@ -228,4 +275,6 @@ export interface GameSnapshot {
   feed: FeedItem[];
   player: PlayerView | null;
   townRelations?: TownRelationView[];
+  /** 公告栏 */
+  board?: BoardView;
 }

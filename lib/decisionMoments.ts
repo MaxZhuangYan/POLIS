@@ -15,6 +15,7 @@ import {
 } from "./records";
 import { getTopPrinciples, logCitation, type PrincipleRow } from "./principleEngine";
 import { applyQuality, createCoop, createTask, getTask, scheduleEvent, setTaskMeta, type TaskMeta } from "./tasks";
+import { runSteps, type Step } from "./consequences";
 import type { Domain } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -71,7 +72,9 @@ export type Effect =
   | { kind: "decline"; npc?: string; memory: string; npcSolo?: { template: string; name?: string; reward?: number } }
   | { kind: "lend"; to: string; amount: number }
   | { kind: "repair"; to: string; how: "apologize" | "compensate" | "let_go"; amount?: number }
-  | { kind: "none"; memory?: string };
+  | { kind: "none"; memory?: string }
+  // consequences as data (lib/consequences.ts) — the residents' dilemmas use this
+  | { kind: "steps"; steps: Step[] };
 
 export interface MomentOption {
   id: string;
@@ -125,7 +128,7 @@ export function getMoment(id: number): MomentRow | null {
   return (getDb().prepare("SELECT * FROM decision_moments WHERE id = ?").get(id) as MomentRow | undefined) ?? null;
 }
 
-interface NewMoment {
+export interface NewMoment {
   agentId: string;
   type: Domain;
   templateId: string;
@@ -139,7 +142,7 @@ interface NewMoment {
   context?: MomentContext;
 }
 
-function insertMoment(m: NewMoment): number {
+export function insertMoment(m: NewMoment): number {
   const now = simNow();
   const res = getDb()
     .prepare(
@@ -882,6 +885,22 @@ export function applyEffect(
     }
     case "none": {
       if (effect.memory) remember(agentId, "guidance", effect.memory, { momentId: moment.id });
+      break;
+    }
+    case "steps": {
+      const created = runSteps(agentId, effect.steps);
+      // the Agent's own jobs from this choice carry the reason ("你说「…」") like any other
+      if (created.length && (opts.reason || opts.principleId)) {
+        const row = db.prepare("SELECT plan_json FROM agents WHERE id = ?").get(agentId) as { plan_json: string };
+        const plan = JSON.parse(row.plan_json || "{}") as { queue?: PlanItem[] };
+        for (const item of plan.queue ?? []) {
+          if (created.includes(item.taskId)) {
+            item.reason = opts.reason ?? item.reason ?? null;
+            item.principleId = opts.principleId ?? item.principleId ?? null;
+          }
+        }
+        db.prepare("UPDATE agents SET plan_json = ? WHERE id = ?").run(JSON.stringify(plan), agentId);
+      }
       break;
     }
   }

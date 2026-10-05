@@ -207,6 +207,21 @@ async function main() {
     console.log("\n=== grudges (holder ← offender) ===");
     for (const i of incidents) console.log(` - ${i.holder_id} ← ${i.offender_id}: ${i.text}`);
     console.log("\n=== judgments ===", JSON.stringify(judg));
+    const ev = (name) => db.prepare("SELECT payload_json FROM metric_events WHERE name = ? ORDER BY at_ms").all(name).map((r) => JSON.parse(r.payload_json));
+    const dilemmas = ev("dilemma");
+    console.log("\n=== residents' dilemmas ===");
+    for (const d of dilemmas) console.log(` - ${d.npc} ${d.templateId} ${d.asked ? "asked the guardian" : `decided alone → ${d.choice}`}`);
+    const sleeps = db.prepare("SELECT text FROM memories WHERE agent_id = ? AND kind = 'principle_dormant'").all(pid);
+    console.log(`imprint slots: ${s.player.imprintSlots.used}/${s.player.imprintSlots.total} · went dormant: ${sleeps.length}`);
+    console.log(`title: ${s.player.progression.title} (rep ${s.player.progression.reputation}) · epithets: ${s.player.progression.epithets.map((e) => `${e.label}(${e.why})`).join(" ") || "—"}`);
+    console.log(`titles reached: ${ev("title_reached").map((t) => t.title).join(" → ") || "—"} · weekly volumes: ${db.prepare("SELECT COUNT(*) n FROM postcards WHERE kind = 'recap7'").get().n}`);
+    const today = s.player.ledger[0];
+    if (today) console.log(`ledger today: net ${today.net} · ${today.lines.map((l) => `${l.label} ${l.amount}`).join(", ")}`);
+    if (DAYS >= 5) check("residents brought their dilemmas (D4+)", dilemmas.length >= 1, `${dilemmas.length}`);
+    check("imprints never exceed the slots", s.player.imprintSlots.used <= s.player.imprintSlots.total, JSON.stringify(s.player.imprintSlots));
+    if (DAYS >= 14) check("a second weekly volume was written", db.prepare("SELECT COUNT(*) n FROM postcards WHERE kind = 'recap7'").get().n >= 2);
+    const steps = db.prepare("SELECT COUNT(*) n FROM scheduled WHERE kind = 'steps' AND done = 0 AND due_ms < ?").get(Date.now() + s.world.offsetMs - 3600_000).n;
+    check("no delayed consequence left overdue", steps === 0, `${steps}`);
     console.log(
       `\nEnd: Day${s.player.dayIndex + 1} scrip=${s.player.agent.scrip} rep=${s.player.agent.reputation} trust=${s.player.trust} principles=${s.player.principles.length} citations=${citations}`,
     );

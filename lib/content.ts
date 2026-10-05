@@ -182,6 +182,8 @@ export interface TaskTemplate {
   seed: Domain | null; // which dilemma this job can raise
   // For skilled jobs: what the dilemma is about (used by autonomous choices)
   dilemma?: "shortcut" | "rush" | "risk" | "overpay";
+  // only residents with at least this reputation may take it (议事厅委托)
+  minRep?: number;
 }
 
 // v1.5 §8.2 subset: per sector 2 routine + 1 skilled + 1 coop.
@@ -204,6 +206,8 @@ export const TASK_TEMPLATES: TaskTemplate[] = [
   { id: "pr-tools", name: "打磨工具", sector: "production", mode: "routine", giver: "tao", location: "workshop", reward: 12, duration: 2, successRate: 1, seed: null },
   { id: "pr-parts", name: "零件加工", sector: "production", mode: "routine", giver: "tao", location: "workshop", reward: 14, duration: 2, successRate: 1, seed: null },
   { id: "pr-order", name: "赶制订单", sector: "production", mode: "skilled", giver: "tao", location: "workshop", reward: 28, duration: 3, successRate: 1, seed: "integrity", dilemma: "rush" },
+  // 声望解锁（lib/progression.ts）: the hall trusts 靠得住的人 with its errands
+  { id: "hall-commission", name: "议事厅委托", sector: "info", mode: "skilled", giver: "kade", location: "hall", reward: 55, duration: 4, successRate: 0.9, seed: null, minRep: 35 },
   { id: "pr-build", name: "建造工程", sector: "production", mode: "coop", giver: "mira", location: "hall", reward: 70, duration: 6, successRate: 0.9, seed: "trust" },
 ];
 
