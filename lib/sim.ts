@@ -7,6 +7,7 @@ import {
   getRelationship,
   logEvent,
   metric,
+  openHearsay,
   openIncidents,
   playerDayIndex,
   playerId,
@@ -48,7 +49,7 @@ import {
 } from "./decisionMoments";
 import { maybeRunDistillationBatch } from "./distillation";
 import { maybeDilemma } from "./dilemmas";
-import { gossipAbout } from "./gossip";
+import { fadeHearsay, gossipAbout, gossipBetween, hearsaySource } from "./gossip";
 import { checkTitle } from "./progression";
 import { llmAvailable } from "./llm";
 import { activeDirective } from "./notes";
@@ -82,6 +83,7 @@ interface AgentRow {
   plan_json: string;
   onboarding: string;
   home_slot: number;
+  record_defaults: number;
 }
 
 interface Plan {
@@ -185,7 +187,10 @@ export function runTick(tickMs: number): void {
       checkTitle(pid);
       if (hour === 23) writeNightlyPostcard(pid);
     }
-    if (hour === 4) decayPrinciples();
+    if (hour === 4) {
+      decayPrinciples();
+      fadeHearsay();
+    }
     // Clear stale emotes/bubbles so the town does not keep yesterday's faces.
     db.prepare("UPDATE agents SET emote = NULL WHERE activity NOT IN ('sleeping','waiting') AND emote IN ('happy','upset','alert','think')").run();
   });
@@ -264,7 +269,7 @@ function planDay(agentId: string): void {
     }
   }
   const grudge = getDb()
-    .prepare("SELECT offender_id, text FROM incidents WHERE holder_id = ? AND resolved = 0 AND at_ms > ? ORDER BY at_ms DESC LIMIT 1")
+    .prepare("SELECT offender_id, text FROM incidents WHERE holder_id = ? AND resolved = 0 AND kind != 'hearsay' AND at_ms > ? ORDER BY at_ms DESC LIMIT 1")
     .get(agentId, simNow() - 2 * 24 * HOUR_MS) as { offender_id: string; text: string } | undefined;
   if (grudge && !queued) intent += `；离 ${agentName(grudge.offender_id)} 远一点`;
   writePlan(agentId, { ...plan, dateKey, intent, reason });
@@ -535,7 +540,9 @@ function proposeCoop(proposer: string, task: TaskRow): boolean {
     .map((x) => {
       const rel = getRelationship(proposer, x.id);
       const grudge = openIncidents(proposer, x.id).length;
-      return { x, s: rel.familiarity - grudge * 40 + Math.random() * 10 };
+      const hearsay = openHearsay(proposer, x.id).length;
+      // first-hand grudges weigh most, hearsay less, and a public record of defaults a little
+      return { x, s: rel.familiarity - grudge * 40 - hearsay * 15 - x.record_defaults * 4 + Math.random() * 10 };
     })
     .sort((p, q) => q.s - p.s);
   const pick = candidates[0]?.x;
@@ -599,14 +606,21 @@ interface Answer {
   reason: string | null;
   principle: PrincipleRow | null;
   grudge?: boolean;
+  hearsay?: boolean;
 }
 
 // NPC accept/refuse (v1.5 §3.4 ★应答): reads its RelationshipRecord.
 function npcAnswersProposal(npcId: string, proposer: string, tpl: TaskTemplate): Answer {
   const t = traitsOf(npcId);
   const grudges = openIncidents(npcId, proposer);
+  const hearsay = openHearsay(npcId, proposer);
   if (grudges.length > 0 && t.trust < 0.7) {
     return { accept: false, why: `上次你${grudges[0].text}`.slice(0, 42), reason: `记着：${grudges[0].text}`, principle: null, grudge: true };
+  }
+  // hearsay is weaker evidence: only the warier residents act on it, and they say where they heard it
+  if (hearsay.length > 0 && t.trust < 0.5 && getRelationship(npcId, proposer).coop_done === 0) {
+    const src = hearsaySource(hearsay[0].text);
+    return { accept: false, why: `我听${src}说了你的事。这单先不了。`, reason: hearsay[0].text, principle: null, hearsay: true };
   }
   if (tpl.successRate < 0.8 && t.risk < 0.35) return { accept: false, why: "太险，我不去。", reason: "嫌风险太大", principle: null };
   const rec = getDb().prepare("SELECT record_defaults FROM agents WHERE id = ?").get(proposer) as { record_defaults: number };
@@ -618,9 +632,12 @@ function npcAnswersProposal(npcId: string, proposer: string, tpl: TaskTemplate):
 // otherwise it asks the guardian (T-1 / T-5).
 function playerAnswersProposal(agentId: string, proposer: string, tpl: TaskTemplate): Answer {
   const grudge = openIncidents(agentId, proposer)[0];
-  let stakes = tpl.reward >= 70 ? `「${tpl.name}」要跨 ${tpl.duration} 个小时，中途谁跑了都白干。` : null;
-  const lean = strongestPrinciple(agentId, "trust");
+  const heard = openHearsay(agentId, proposer)[0];
   const rel = getRelationship(agentId, proposer);
+  let stakes = tpl.reward >= 70 ? `「${tpl.name}」要跨 ${tpl.duration} 个小时，中途谁跑了都白干。` : null;
+  // a story it heard (with its source) and never checked for itself: enough to make it hesitate
+  if (!stakes && heard && rel.coop_done === 0) stakes = `${heard.text}——我没亲眼见过，拿不准。`;
+  const lean = strongestPrinciple(agentId, "trust");
   const defaults = (getDb().prepare("SELECT record_defaults FROM agents WHERE id = ?").get(proposer) as { record_defaults: number }).record_defaults;
   // ③ relationship history vs principle: "don't work with defaulters" — but we've done it together before.
   if (!stakes && lean && lean.stance_dir < 0 && defaults > 0 && rel.coop_done >= 1) {
@@ -636,10 +653,13 @@ function playerAnswersProposal(agentId: string, proposer: string, tpl: TaskTempl
     // Cannot ask today: decides itself from what it knows about the proposer (a grudge, the public record,
     // work done together), and only falls back on its disposition when it knows nothing.
     const t = traitsOf(agentId);
-    const ok = !grudge && (defaults === 0 || rel.coop_done >= 1 || t.trust >= 0.5);
+    const doubt = !!heard && rel.coop_done === 0 && t.trust < 0.6;
+    const ok = !grudge && !doubt && (defaults === 0 || rel.coop_done >= 1 || t.trust >= 0.5);
     const because = grudge
       ? `TA 上次${grudge.text}`
-      : defaults === 0
+      : doubt
+        ? `${heard!.text}，我还没底`
+        : defaults === 0
         ? "TA 档案上没有违约"
         : rel.coop_done >= 1
           ? `TA 档案上有违约，可我们一起做成过 ${rel.coop_done} 单`
@@ -712,9 +732,13 @@ function eveningEncounters(): void {
     const latest = db
       .prepare("SELECT text FROM memories WHERE agent_id = ? AND at_ms > ? ORDER BY at_ms DESC LIMIT 1")
       .get(p.id, simNow() - 14 * HOUR_MS) as { text: string } | undefined;
-    // 传闻: residents talk about the guardian's Agent when it is not in the group
+    // 传闻: residents talk — about the guardian's Agent when it is not there, about each other, and to the Agent
     const pid = playerId();
+    const everyone = agents().map((x) => x.id);
     if (pid && !group.some((x) => x.id === pid) && Math.random() < 0.5 && gossipAbout(pid, p.id, q.id)) continue;
+    if (pid && q.id === pid && p.id !== pid && Math.random() < 0.6 && gossipBetween(p.id, pid, everyone, true)) continue;
+    if (pid && p.id === pid && q.id !== pid && Math.random() < 0.6 && gossipBetween(q.id, pid, everyone, true)) continue;
+    if (p.id !== pid && q.id !== pid && Math.random() < 0.4 && gossipBetween(p.id, q.id, everyone, false)) continue;
     if (grudge) {
       say(p.id, `……${q.name}。`, "upset");
       adjustRelationship(p.id, q.id, -1, null);
@@ -740,7 +764,8 @@ function loanRequests(): void {
     if (lender.is_player) {
       if (lender.onboarding !== "done") continue;
       const grudge = openIncidents(lender.id, n.id)[0];
-      const sd = canDecideAlone(lender.id, "trust", grudge ? `${n.name} ${grudge.text}` : null);
+      const heard = openHearsay(lender.id, n.id)[0];
+      const sd = canDecideAlone(lender.id, "trust", grudge ? `${n.name} ${grudge.text}` : heard ? `${heard.text}——我没亲眼见过。` : null);
       if (sd.escalate && canAsk(lender.id, { template: "T-4" })) {
         loanMoment(lender.id, n.id, amount, sd.why);
         continue;
@@ -756,7 +781,10 @@ function loanRequests(): void {
       continue;
     }
     const t = traitsOf(lender.id);
-    if (t.trust >= 0.5 && openIncidents(lender.id, n.id).length === 0) applyLoan(lender.id, n.id, amount, null);
+    // a lender who has only heard stories lends if trusting enough; one who saw it for themselves does not
+    if (t.trust >= 0.5 && openIncidents(lender.id, n.id).length === 0 && (t.trust >= 0.7 || openHearsay(lender.id, n.id).length === 0)) {
+      applyLoan(lender.id, n.id, amount, null);
+    }
   }
 }
 

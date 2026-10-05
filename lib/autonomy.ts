@@ -2,7 +2,7 @@ import { getDb } from "./db";
 import { simNow } from "./clock";
 import { FORCE_TICKET_COST, NPC_BY_ID } from "./content";
 import { chat, extractJson, llmAvailable } from "./llm";
-import { agentName, changeTrust, logEvent, metric, openIncidents, pay, playerDayIndex, remember, say } from "./records";
+import { agentName, changeTrust, logEvent, metric, openHearsay, openIncidents, pay, playerDayIndex, remember, say } from "./records";
 import { getTopPrinciples, logCitation, type PrincipleRow } from "./principleEngine";
 import { distillMomentNow } from "./distillation";
 import {
@@ -103,6 +103,9 @@ function evidenceFor(agentId: string, moment: MomentRow, principle: PrincipleRow
       if (dir < 0) {
         const inc = openIncidents(agentId, npc)[0];
         if (inc) out.push(`${agentName(npc)} ${inc.text}`);
+        // what it only heard counts too, with its source and as hearsay
+        const heard = openHearsay(agentId, npc)[0];
+        if (!inc && heard) out.push(heard.text);
         const rec = db.prepare("SELECT record_defaults FROM agents WHERE id = ?").get(npc) as { record_defaults: number } | undefined;
         if (rec && rec.record_defaults > 0) out.push(`档案上 ${agentName(npc)} 有 ${rec.record_defaults} 次违约`);
         const unpaid = db.prepare("SELECT COUNT(*) n FROM incidents WHERE holder_id = ? AND offender_id = ? AND kind = 'unpaid_loan'").get(agentId, npc) as { n: number };
@@ -125,7 +128,7 @@ function evidenceFor(agentId: string, moment: MomentRow, principle: PrincipleRow
           : `上次我赶工做的零件害 ${agentName(caught.holder_id)} 的运送失败了`,
       );
     }
-    const grudges = db.prepare("SELECT COUNT(*) n FROM incidents WHERE offender_id = ? AND resolved = 0").get(agentId) as { n: number };
+    const grudges = db.prepare("SELECT COUNT(*) n FROM incidents WHERE offender_id = ? AND resolved = 0 AND kind != 'hearsay'").get(agentId) as { n: number };
     if (grudges.n > 0) out.push(`城里还有 ${grudges.n} 件事有人记在我头上`);
   } else {
     const passed = db

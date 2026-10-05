@@ -148,7 +148,7 @@ function townRelations(): TownRelationView[] {
     .prepare("SELECT agent_id, other_id, familiarity, coop_done FROM relationships WHERE familiarity > 0 OR coop_done > 0")
     .all() as Array<{ agent_id: string; other_id: string; familiarity: number; coop_done: number }>;
   const grudges = db
-    .prepare("SELECT holder_id, offender_id, text FROM incidents WHERE resolved = 0 ORDER BY at_ms DESC")
+    .prepare("SELECT holder_id, offender_id, text FROM incidents WHERE resolved = 0 AND kind != 'hearsay' ORDER BY at_ms DESC")
     .all() as Array<{ holder_id: string; offender_id: string; text: string }>;
   const key = (a: string, b: string) => `${a}→${b}`;
   const out = new Map<string, TownRelationView>();
@@ -180,6 +180,7 @@ const MEMORY_TAG: Record<string, MemoryTag> = {
   principle_dormant: "后来",
   principle_woken: "后来",
   wavering: "后来",
+  hearsay: "别人",
   proposed: "别人",
   refused_other: "别人",
 };
@@ -301,9 +302,20 @@ export function buildSnapshot(): GameSnapshot {
     const theirs = getRelationship(n.id, pid);
     const incidents = (
       db
-        .prepare("SELECT text, at_ms, holder_id FROM incidents WHERE ((holder_id = ? AND offender_id = ?) OR (holder_id = ? AND offender_id = ?)) AND resolved = 0 ORDER BY at_ms DESC LIMIT 5")
-        .all(pid, n.id, n.id, pid) as Array<{ text: string; at_ms: number; holder_id: string }>
-    ).map((i) => ({ text: i.holder_id === pid ? `我记着：${n.name} ${i.text}` : `${n.name} 记着你：${i.text}`, atMs: i.at_ms }));
+        .prepare("SELECT text, at_ms, holder_id, kind FROM incidents WHERE ((holder_id = ? AND offender_id = ?) OR (holder_id = ? AND offender_id = ?)) AND resolved = 0 ORDER BY at_ms DESC LIMIT 5")
+        .all(pid, n.id, n.id, pid) as Array<{ text: string; at_ms: number; holder_id: string; kind: string }>
+    ).map((i) => ({
+      // hearsay already names its source (听 X 说：…); it is what one of them heard, not what they saw
+      text:
+        i.kind === "hearsay"
+          ? i.holder_id === pid
+            ? `我${i.text}`
+            : `${n.name}${i.text}`
+          : i.holder_id === pid
+            ? `我记着：${n.name} ${i.text}`
+            : `${n.name} 记着你：${i.text}`,
+      atMs: i.at_ms,
+    }));
     return {
       otherId: n.id,
       familiarity: Math.round((rel.familiarity + theirs.familiarity) / 2),

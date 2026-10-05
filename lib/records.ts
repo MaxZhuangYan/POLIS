@@ -122,7 +122,8 @@ export interface IncidentRow {
   resolved: number;
 }
 
-// holder remembers that offender did something; ≤5 per pair (新事顶旧事).
+// holder remembers that offender did something; ≤5 per pair (新事顶旧事), counted separately for
+// first-hand incidents and hearsay so stories never push out what the holder saw for themselves.
 export function recordIncident(holderId: string, offenderId: string, kind: string, text: string): void {
   const db = getDb();
   db.prepare("INSERT INTO incidents (holder_id, offender_id, kind, text, at_ms, resolved) VALUES (?, ?, ?, ?, ?, 0)").run(
@@ -134,15 +135,23 @@ export function recordIncident(holderId: string, offenderId: string, kind: strin
   );
   const extra = db
     .prepare(
-      "SELECT id FROM incidents WHERE holder_id = ? AND offender_id = ? ORDER BY at_ms DESC LIMIT -1 OFFSET 5",
+      "SELECT id FROM incidents WHERE holder_id = ? AND offender_id = ? AND (kind = 'hearsay') = ? ORDER BY at_ms DESC LIMIT -1 OFFSET 5",
     )
-    .all(holderId, offenderId) as Array<{ id: number }>;
+    .all(holderId, offenderId, kind === "hearsay" ? 1 : 0) as Array<{ id: number }>;
   for (const e of extra) db.prepare("DELETE FROM incidents WHERE id = ?").run(e.id);
 }
 
+/** What `holder` saw `offender` do (first-hand, unresolved). Hearsay is kept apart: see openHearsay. */
 export function openIncidents(holderId: string, offenderId: string): IncidentRow[] {
   return getDb()
-    .prepare("SELECT * FROM incidents WHERE holder_id = ? AND offender_id = ? AND resolved = 0 ORDER BY at_ms DESC")
+    .prepare("SELECT * FROM incidents WHERE holder_id = ? AND offender_id = ? AND resolved = 0 AND kind != 'hearsay' ORDER BY at_ms DESC")
+    .all(holderId, offenderId) as IncidentRow[];
+}
+
+/** Stories `holder` has heard about `offender` (text starts with 听 <source> 说：), weaker evidence than openIncidents. */
+export function openHearsay(holderId: string, offenderId: string): IncidentRow[] {
+  return getDb()
+    .prepare("SELECT * FROM incidents WHERE holder_id = ? AND offender_id = ? AND resolved = 0 AND kind = 'hearsay' ORDER BY at_ms DESC")
     .all(holderId, offenderId) as IncidentRow[];
 }
 

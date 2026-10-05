@@ -68,7 +68,7 @@ export function epithetsFor(agentId: string): EpithetView[] {
     const refusals = (db.prepare("SELECT COUNT(*) n FROM judgments WHERE agent_id = ? AND decision = 'refuse'").get(agentId) as { n: number }).n;
     if (refusals >= 2) out.push({ label: "有主见的", why: `对你说过 ${refusals} 次「不」` });
   }
-  const held = (db.prepare("SELECT COUNT(*) n FROM incidents WHERE offender_id = ? AND resolved = 0").get(agentId) as { n: number }).n;
+  const held = (db.prepare("SELECT COUNT(*) n FROM incidents WHERE offender_id = ? AND resolved = 0 AND kind != 'hearsay'").get(agentId) as { n: number }).n;
   if (held >= 2) out.push({ label: "被人记着的", why: `城里有 ${held} 件事记在它头上` });
   const helped = (
     db.prepare("SELECT COUNT(*) n FROM ledger WHERE agent_id = ? AND reason IN ('guarantee_payout','advance_payment','loan_out','compensation') AND amount < 0").get(agentId) as {
@@ -292,7 +292,7 @@ export function writeWeeklyRecap(agentId: string, dayIndex: number): void {
        WHERE (taken_by = ? OR partner_id = ?) AND mode = 'coop' AND status = 'done' AND done_ms >= ? GROUP BY other ORDER BY n DESC LIMIT 1`,
     )
     .get(agentId, agentId, agentId, since) as { other: string | null; n: number } | undefined;
-  const grudges = db.prepare("SELECT holder_id, text FROM incidents WHERE offender_id = ? AND at_ms >= ?").all(agentId, since) as Array<{ holder_id: string; text: string }>;
+  const grudges = db.prepare("SELECT holder_id, text FROM incidents WHERE offender_id = ? AND at_ms >= ? AND kind != 'hearsay'").all(agentId, since) as Array<{ holder_id: string; text: string }>;
   const last = surveyOf(agentId).find((s) => s.volume === volume - 1);
   const title = TITLE_TIERS[tierOf(a.reputation)].title;
 

@@ -299,7 +299,7 @@ function kadeMediate(agentId: string): Dilemma | null {
   const db = getDb();
   const inc = db
     .prepare(
-      `SELECT holder_id, offender_id, text FROM incidents WHERE resolved = 0 AND holder_id != ? AND offender_id != ?
+      `SELECT holder_id, offender_id, text FROM incidents WHERE resolved = 0 AND kind != 'hearsay' AND holder_id != ? AND offender_id != ?
          AND holder_id IN (SELECT id FROM agents WHERE is_player = 0) AND offender_id IN (SELECT id FROM agents WHERE is_player = 0)
          AND holder_id != 'kade' AND offender_id != 'kade'
        ORDER BY at_ms DESC LIMIT 1`,

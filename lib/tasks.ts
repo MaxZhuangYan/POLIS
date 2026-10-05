@@ -1,5 +1,6 @@
 import { getDb } from "./db";
 import { resolveGuess } from "./dilemmas";
+import { clearHearsayBetween } from "./gossip";
 import { runSteps, runTaskHook, type Step } from "./consequences";
 import { simNow, HOUR_MS, worldTz, localParts } from "./clock";
 import { CHAIN_DELIVERY, LOCATION_NAMES, NPC_BY_ID, TEMPLATE_BY_ID, TASK_TEMPLATES, type TaskTemplate } from "./content";
@@ -300,6 +301,12 @@ export function resolveTask(task: TaskRow): void {
     if (partner) {
       adjustRelationship(owner, partner, 15, `一起完成了${named}`, 1);
       adjustRelationship(partner, owner, 15, `一起完成了${named}`, 1);
+      // seeing for yourself: what each had only heard about the other stops counting
+      if (clearHearsayBetween(owner, partner) > 0) {
+        const pid = members.find(isPlayer);
+        const other = pid && members.find((x) => x !== pid);
+        if (pid && other) remember(pid, "consequence", `之前听来的 ${agentName(other)} 的那些话，这回一起做完${named}，我自己看过了，不算数了。`, { other });
+      }
     }
     logEvent({
       kind: partner ? "coop" : "task",
