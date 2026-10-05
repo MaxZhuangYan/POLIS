@@ -230,7 +230,7 @@ function createDb(): Database.Database {
       done INTEGER NOT NULL DEFAULT 0
     );
 
-    -- 默契 (lib/dilemmas.ts): a decision the Agent makes by itself an hour from now; the guardian may guess it first
+    -- 默契 (lib/dilemmas.ts): a decision the Agent makes by itself by evening; the guardian may guess it first
     CREATE TABLE IF NOT EXISTS guesses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id TEXT NOT NULL,

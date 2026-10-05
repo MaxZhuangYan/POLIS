@@ -16,3 +16,9 @@ polis-test.db*
 .claude/worktrees/
 .next-prod
 .next-*
+
+# browser playtests and scenario runs
+playtest-output/
+.next-playtest*
+.next-scenario*
+*.lock

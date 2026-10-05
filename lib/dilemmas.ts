@@ -18,7 +18,7 @@
 // ---------------------------------------------------------------------------
 
 import { getDb } from "./db";
-import { simNow, DAY_MS, HOUR_MS, localDayBounds } from "./clock";
+import { simNow, DAY_MS, HOUR_MS, localDayBounds, nextLocalHour } from "./clock";
 import { agentName, getRelationship, logEvent, metric, openIncidents, playerDayIndex, remember, say } from "./records";
 import { canAsk, canDecideAlone, insertMoment, optionForDir, applyEffect, type MomentOption, type MomentRow } from "./decisionMoments";
 import { logCitation } from "./principleEngine";
@@ -512,12 +512,13 @@ function fire(agentId: string, d: Dilemma): boolean {
     return true;
   }
 
-  // It knows what it thinks. It settles the matter an hour from now by its imprint — the guardian may guess first (默契).
+  // It knows what it thinks. It settles the matter by evening, by its imprint — the guardian may guess first (默契).
   d.setup?.();
   const p = sd.principle!;
   const choice = optionForDir(d.options, sd.dir);
   const now = simNow();
-  const due = now + HOUR_MS;
+  // it answers by evening (at least two hours): long enough for a guardian who checks in a few times a day to guess
+  const due = Math.max(now + 2 * HOUR_MS, nextLocalHour(18, now));
   const db = getDb();
   const res = db
     .prepare(
@@ -540,7 +541,7 @@ function fire(agentId: string, d: Dilemma): boolean {
     );
   scheduleEvent(due, "self_decide", { guessId: Number(res.lastInsertRowid) });
   say(agentId, "这件事，我心里有数。", "think");
-  logEvent({ kind: "moment", text: `${agentName(d.npc)} 来找 ${agentName(agentId)} 商量：${d.origin}。它说心里有数，一个小时后给答复`, actors: [agentId, d.npc], importance: 2 });
+  logEvent({ kind: "moment", text: `${agentName(d.npc)} 来找 ${agentName(agentId)} 商量：${d.origin}。它说心里有数，傍晚前给答复`, actors: [agentId, d.npc], importance: 2 });
   metric("dilemma", { npc: d.npc, templateId: d.templateId, asked: false, choice: choice.id, principleId: p.id });
   return true;
 }

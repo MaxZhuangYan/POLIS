@@ -16,7 +16,9 @@
     "test:pathfinding": "node scripts/test-pathfinding.mjs",
     "map:build": "node scripts/build-town-map.mjs",
     "map:check": "node scripts/map-check.mjs",
-    "map:preview": "python3 scripts/render-town-preview.py"
+    "map:preview": "python3 scripts/render-town-preview.py",
+    "scenario": "node scripts/scenario.mjs",
+    "playtest:new": "node scripts/playtest/new.mjs"
   },
   "dependencies": {
     "@fontsource/fusion-pixel-12px-proportional-sc": "^5.3.0",
@@ -34,6 +36,7 @@
     "autoprefixer": "^10.4.21",
     "eslint": "^9.27.0",
     "eslint-config-next": "^15.3.3",
+    "playwright": "~1.56.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3"
