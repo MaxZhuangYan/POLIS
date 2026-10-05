@@ -71,7 +71,15 @@ async function main() {
   console.log(`Polis sim playthrough — policy=${POLICY}, days=${DAYS}, db=${DB_PATH}`);
   const server = spawn("npx", ["next", "dev", "-p", String(PORT)], {
     cwd: ROOT,
-    env: { ...process.env, POLIS_TEST_MODE: "1", POLIS_DB_PATH: DB_PATH, POLIS_LLM: "off", NEXT_DIST_DIR: undefined },
+    // Own distDir so this can run next to a dev server; offline unless
+    // SIM_LLM_URL points at an OpenAI-compatible endpoint (e.g. scripts/mock-llm.mjs).
+    env: {
+      ...process.env,
+      POLIS_TEST_MODE: "1",
+      POLIS_DB_PATH: DB_PATH,
+      NEXT_DIST_DIR: `.next-sim-${POLICY}`,
+      ...(process.env.SIM_LLM_URL ? { POLIS_LLM_URL: process.env.SIM_LLM_URL, POLIS_LLM_MODEL: "mock-plumbing" } : { POLIS_LLM: "off" }),
+    },
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
@@ -139,7 +147,12 @@ async function main() {
         story.push(`Day${c.dayIndex + 1} POSTCARD (${c.kind}/${c.source}):\n      ${c.lines.join("\n      ")}`);
         const texts = new Set(p.principles.map((x) => x.text));
         const quotes = [...c.lines.join("").matchAll(/『(.+?)』/g)].map((m) => m[1]);
-        check(`postcard ${c.id} quotes ≥1 real principle or note`, quotes.some((q) => texts.has(q)) || c.kind === "recap7", quotes.join(","));
+        const noteTexts = new Set(p.notes.items.map((x) => x.text));
+        check(
+          `postcard ${c.id} quotes ≥1 real principle or note`,
+          quotes.some((q) => texts.has(q) || noteTexts.has(q)) || c.kind === "recap7",
+          `quotes=[${quotes.join(",")}] lines=${JSON.stringify(c.lines)}`,
+        );
         await api("POST", `/api/postcards/${c.id}/read`);
       }
       if (h % 24 === 21 && p.dayIndex >= 1 && p.notes.leftToday > 0 && h < 72) {

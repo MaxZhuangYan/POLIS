@@ -257,10 +257,18 @@ async function llmJudge(agentId: string, moment: MomentRow, chosen: MomentOption
   const preferred = cited ? options.find((o) => Math.sign(o.stance.dir) === Math.sign(cited.stance_dir) && o.id !== chosen.id) : null;
   if (finalDecision === "refuse" && !preferred) finalDecision = ctx.adjust ? "adjust" : "execute";
   if (finalDecision === "adjust" && !ctx.adjust) finalDecision = "execute";
+  // A deviation the timing gate turned into compliance must not keep the
+  // refusal wording: the Agent complies and only voices the principle.
+  const spoken =
+    finalDecision === "execute" && decision !== "execute"
+      ? cited
+        ? `好，我照你说的做。只是……你说过『${cited.text}』。`
+        : "好，我照你说的做。"
+      : toPlayer || "好，我照你说的做。";
   return {
     decision: finalDecision,
     cited,
-    toPlayer: toPlayer || "好，我照你说的做。",
+    toPlayer: spoken,
     reasons: [...evidence, typeof parsed.reason === "string" ? parsed.reason : ""].filter(Boolean),
     alt: finalDecision === "refuse" ? preferred!.id : finalDecision === "adjust" ? "ADJUST" : null,
     source: "llm",

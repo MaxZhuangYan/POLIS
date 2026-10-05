@@ -14,3 +14,5 @@ tsconfig.tsbuildinfo
 *.db-shm
 polis-test.db*
 .claude/worktrees/
+.next-prod
+.next-*
