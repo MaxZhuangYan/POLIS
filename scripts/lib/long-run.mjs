@@ -1,7 +1,8 @@
 // Long-run health report for a finished sim save (scripts/sim-playthrough.mjs prints it).
 //
 // What a month of play can go wrong in, measured from the save itself (nothing here is sampled or estimated):
-//   * interruptions — forks / judgments / 默契 guesses / waverings asking for the guardian, per day
+//   * interruptions — forks / 默契 guesses / waverings the game starts, per day (judgments listed apart: they answer the
+//     guardian's own reply to a fork)
 //   * stagnation   — days where nothing of weight (importance >= 2) happened to the Agent
 //   * repetition   — share of the Agent's memories that repeat an earlier one word-for-word (numbers masked)
 //   * economy      — the Agent's balance by day, residents who are broke or hoarding
@@ -34,11 +35,15 @@ export function longRunReport(db, pid) {
   for (const r of db.prepare("SELECT created_ms FROM judgments WHERE agent_id = ?").all(pid)) bump(asks.judgment, r.created_ms);
   for (const r of db.prepare("SELECT created_ms FROM guesses WHERE agent_id = ?").all(pid)) bump(asks.guess, r.created_ms);
   for (const r of db.prepare("SELECT created_at FROM wavering_events WHERE agent_id = ?").all(pid)) bump(asks.wavering, r.created_at);
-  const total = perDay().map((_, d) => asks.fork[d] + asks.judgment[d] + asks.guess[d] + asks.wavering[d]);
+  // an interruption is contact the game starts: a fork, a 默契 guess, a 质问. A judgment is the Agent answering the
+  // guardian's own reply to a fork — the same exchange — so it is shown but not counted as another interruption.
+  const total = perDay().map((_, d) => asks.fork[d] + asks.guess[d] + asks.wavering[d]);
   const expired = db.prepare("SELECT COUNT(*) n FROM decision_moments WHERE agent_id = ? AND status = 'expired_autonomous'").get(pid).n;
-  lines.push(`asks per day (fork+judgment+guess+wavering): ${total.join(" ")}  · forks that ran out and the Agent decided: ${expired}`);
+  lines.push(
+    `interruptions per day (fork+guess+wavering): ${total.join(" ")}  · judgments (replies to the guardian's answers) per day: ${asks.judgment.join(" ")}  · forks that ran out and the Agent decided: ${expired}`,
+  );
   const busiest = Math.max(...total.slice(1));
-  checks.push({ label: "no day after D1 asks the guardian more than 5 times", ok: busiest <= 5, detail: `max ${busiest}` });
+  checks.push({ label: "no day after D1 interrupts the guardian more than 5 times", ok: busiest <= 5, detail: `max ${busiest}` });
   const quietWeeks = [];
   // whole weeks only: the run's last, partial week (often just the final evening) says nothing
   for (let w = 1; w * 7 + 7 <= days; w++) {
