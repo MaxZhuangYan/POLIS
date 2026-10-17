@@ -296,7 +296,9 @@ export function writeWeeklyRecap(agentId: string, dayIndex: number): void {
   const net = (
     db.prepare("SELECT COALESCE(SUM(amount), 0) s FROM ledger WHERE agent_id = ? AND at_ms >= ? AND reason != 'task_fee_burn'").get(agentId, since) as { s: number }
   ).s;
-  const formed = db.prepare("SELECT text FROM principles WHERE agent_id = ? AND created_at >= ? AND source != 'core'").all(agentId, since) as Array<{ text: string }>;
+  // a forced scar is not something it came to believe: listed apart from the imprints it formed
+  const formed = db.prepare("SELECT text FROM principles WHERE agent_id = ? AND created_at >= ? AND source NOT IN ('core','forced')").all(agentId, since) as Array<{ text: string }>;
+  const forcedScars = db.prepare("SELECT text FROM principles WHERE agent_id = ? AND created_at >= ? AND source = 'forced'").all(agentId, since) as Array<{ text: string }>;
   const slept = db.prepare("SELECT text FROM memories WHERE agent_id = ? AND kind = 'principle_dormant' AND at_ms >= ?").all(agentId, since) as Array<{ text: string }>;
   const highlight = db
     .prepare(
@@ -326,6 +328,7 @@ export function writeWeeklyRecap(agentId: string, dayIndex: number): void {
     `档案第 ${volume} 卷：${a.name} 入城第 ${dayIndex + 1} 日。——Iris`,
     `这一周：完成任务 ${done} 单 · Scrip ${net >= 0 ? "+" : ""}${net} · 声望 ${a.reputation}`,
     ...(formed.length ? [`新的烙印：${formed.map((p) => `『${p.text}』`).join("、")}`] : ["这一周没有新的烙印。"]),
+    ...(forcedScars.length ? [`你强迫了它 ${forcedScars.length} 次。它记着：${forcedScars.map((p) => `『${p.text}』`).join("、")}`] : []),
     ...(slept.length ? [`沉睡的烙印：${slept.length} 条`] : []),
     ...(partner?.other && partner.n > 0 ? [`走得最近的人：${agentName(partner.other)}，一起做成了 ${partner.n} 单。`] : []),
     ...(grudges.length ? [`有人记下了它：${grudges.map((g) => `${agentName(g.holder_id)}（${g.text}）`).join("；")}`] : []),
@@ -336,7 +339,7 @@ export function writeWeeklyRecap(agentId: string, dayIndex: number): void {
     `公告栏上，它的名字后面写着「${title}」。`,
     ...(watch.length ? [`下周看点：${watch.join("；")}`] : []),
   ];
-  const cited = [...formed.map((p) => p.text), ...Array.from((highlight?.text ?? "").matchAll(/『(.+?)』/g)).map((m) => m[1])];
+  const cited = [...formed.map((p) => p.text), ...forcedScars.map((p) => p.text), ...Array.from((highlight?.text ?? "").matchAll(/『(.+?)』/g)).map((m) => m[1])];
   db.prepare("INSERT INTO postcards (agent_id, day_index, kind, title, lines_json, cited_json, facts_json, source, created_ms) VALUES (?, ?, 'recap7', ?, ?, ?, '{}', 'template', ?)").run(
     agentId,
     dayIndex,
