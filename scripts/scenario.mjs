@@ -253,11 +253,15 @@ async function playPitch(api, { log, extraHours, playerName = "阿守" }) {
   }
 
   // ── the look-around phase: from day 9 07:00 on, one hour at a time ──
-  // good = a fork or an unguessed 默契 in front of the guardian + an unread postcard + the town in daytime
+  // good = a fork (≥3 h left) or an unguessed 默契 (≥1.5 h left) in front of the guardian + an unread postcard + the town in daytime
   const good = (st) => {
     const p = st.player;
-    const pending = p.pendingMoments.length > 0 || (p.guess != null && !p.guess.guessed);
-    return pending && p.postcards.unread > 0 && DAYTIME(st.world.hour) && !st.world.isNight;
+    const now = st.world.simNowMs;
+    // forks expire (the Agent then decides alone) 24 h after they appear, a 默契 is settled by its due time:
+    // do not stop on one that is about to run out while the presenter is still talking
+    const forksFresh = p.pendingMoments.length > 0 && p.pendingMoments.every((m) => m.expiresAtMs - now >= 3 * 3_600_000);
+    const guessFresh = p.guess != null && !p.guess.guessed && p.guess.dueMs - now >= 90 * 60_000;
+    return (forksFresh || guessFresh) && p.postcards.unread > 0 && DAYTIME(st.world.hour) && !st.world.isNight;
   };
   let extra = 0;
   for (;;) {
@@ -360,8 +364,10 @@ function pitchReport(dbPath, state) {
 function pendingLines(s) {
   const p = s.player;
   const out = [];
-  out.push(`forks        ${p.pendingMoments.length}: ${p.pendingMoments.map((m) => `${m.templateId} (${m.speakerId ?? "?"}) "${m.promptText.slice(0, 40)}…" [${m.options.map((o) => o.label).join(" / ")}]`).join(" | ") || "—"}`);
-  out.push(`默契 guess    ${p.guess ? `${p.guess.guessed ? "already guessed" : "PENDING"}: ${p.guess.origin} [${p.guess.options.map((o) => o.label).join(" / ")}]` : "—"}`);
+  const now = s.world.simNowMs;
+  const hrs = (ms) => `${Math.round(((ms - now) / 3_600_000) * 10) / 10} h`;
+  out.push(`forks        ${p.pendingMoments.length}: ${p.pendingMoments.map((m) => `${m.templateId} (${m.speakerId ?? "?"}, ${hrs(m.expiresAtMs)} left) "${m.promptText.slice(0, 40)}…" [${m.options.map((o) => o.label).join(" / ")}]`).join(" | ") || "—"}`);
+  out.push(`默契 guess    ${p.guess ? `${p.guess.guessed ? "already guessed" : `PENDING (settled in ${hrs(p.guess.dueMs)})`}: ${p.guess.origin} [${p.guess.options.map((o) => o.label).join(" / ")}]` : "—"}`);
   out.push(`wavering     ${p.pendingWavering ? "pending: " + p.pendingWavering.promptText.slice(0, 60) : "—"}`);
   out.push(`postcards    ${p.postcards.unread} unread: ${p.postcards.items.filter((c) => !c.read).map((c) => c.title).join(" | ") || "—"}`);
   out.push(`scrip        ${p.agent.scrip} (强制执行 costs 30 Scrip; ${p.agent.scrip >= 30 ? "affordable" : "NOT enough for a live force"})`);
