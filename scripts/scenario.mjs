@@ -375,12 +375,13 @@ function pendingLines(s) {
 }
 
 /**
- * Which answer to the first pending fork makes the Agent push back? Asked of THROW-AWAY COPIES of the save (one server
+ * Which answer to the pending fork with the most time left makes the Agent push back? Asked of THROW-AWAY COPIES of the save (one server
  * per option, through POST /api/decisions/:id/choose, the same call the UI makes); the real save is not touched.
  * The rules engine is deterministic for a given state, so the real save answers the same way.
  */
 async function probeFirstFork(dbPath, state) {
-  const m = state.player.pendingMoments[0];
+  // the fork with the most time left: the one the presenter can still answer when they get to it
+  const m = [...state.player.pendingMoments].sort((a, b) => b.expiresAtMs - a.expiresAtMs)[0];
   if (!m) return null;
   const rows = [];
   for (const [i, o] of m.options.entries()) {
@@ -472,7 +473,7 @@ async function pitchMain(args, dbPath) {
   for (const l of pendingLines(s)) console.log(`  ${l}`);
   if (!best.res.good) console.log("  NOTE: no hour in the search window had a fork / 默契 guess + an unread postcard in daytime. Use the fallback in doc/DEMO.md, or rebuild with --tries 5 --extra-hours 48.");
   if (probe) {
-    console.log(`\nIF THE PRESENTER ANSWERS ${probe.fork} FIRST (probe on copies, offline rules engine)`);
+    console.log(`\nIF THE PRESENTER ANSWERS ${probe.fork} (the fork with the most time left; probe on copies, offline rules engine)`);
     for (const r of probe.rows) console.log(`  「${r.label}」 -> ${r.decision ?? "no judgment"}${r.text ? `: ${r.text.slice(0, 110)}` : ""}`);
   }
   console.log("\nWHAT TO SHOW (read from this save's rows)");
