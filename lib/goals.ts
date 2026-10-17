@@ -96,12 +96,12 @@ export function goalNews(since: number): { bought: string[]; close: string[] } {
     db.prepare("SELECT payload_json FROM metric_events WHERE name = 'purchase' AND at_ms >= ? ORDER BY at_ms").all(since) as Array<{ payload_json: string }>
   ).map((r) => {
     const p = JSON.parse(r.payload_json) as { npc: string; what: string };
-    return `${agentName(p.npc)}${p.what}`;
+    return `${agentName(p.npc)} ${p.what}`;
   });
   const close: string[] = [];
   for (const n of db.prepare("SELECT id, scrip FROM agents WHERE is_player = 0").all() as Array<{ id: string; scrip: number }>) {
     const g = goalOf(n.id);
-    if (g && g.price - n.scrip > 0 && g.price - n.scrip <= 80) close.push(`${agentName(n.id)}想${g.what}，还差 ${g.price - n.scrip} Scrip`);
+    if (g && g.price - n.scrip > 0 && g.price - n.scrip <= 80) close.push(`${agentName(n.id)} 想${g.what}，还差 ${g.price - n.scrip} Scrip`);
   }
   return { bought, close };
 }

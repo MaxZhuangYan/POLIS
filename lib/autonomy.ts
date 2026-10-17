@@ -440,9 +440,10 @@ export function resolveJudgment(id: number, action: "accept" | "force" | "adopt"
     pay(agentId, -FORCE_TICKET_COST, "ticket_purchase");
     const applied = changeTrust(agentId, -10, "强制执行");
     const situation = (parseContext(moment).origin as string | undefined) ?? moment.prompt_text.slice(0, 16);
-    // keep the sentence whole: shorten the situation, never the "强迫我"
-    const sit = Array.from(situation);
-    const text = `你曾在「${sit.length > 16 ? `${sit.slice(0, 15).join("")}…` : situation}」时强迫我`;
+    // keep the sentence whole: shorten the situation, never the "强迫我"; its own quote marks are dropped so a cut
+    // can never leave a bracket open inside the imprint (or a 『』 that would read as a quoted principle)
+    const sit = Array.from(situation.replace(/[「」『』]/g, ""));
+    const text = `你曾在「${sit.length > 16 ? `${sit.slice(0, 15).join("")}…` : sit.join("")}」时强迫我`;
     db.prepare(
       `INSERT INTO principles (agent_id, text, domain, weight, source_decision_id, source, last_cited_at, last_decayed_at, created_at, origin_text, stance_dir)
        VALUES (?, ?, 'trust', 1.0, ?, 'forced', NULL, ?, ?, ?, 0)`,
