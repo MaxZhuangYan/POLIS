@@ -27,7 +27,7 @@ import { agentName, getRelationship, logEvent, metric, openIncidents, playerDayI
 import { canAsk, canDecideAlone, insertMoment, optionForDir, applyEffect, type MomentOption, type MomentRow } from "./decisionMoments";
 import { logCitation } from "./principleEngine";
 import { createTask, scheduleEvent, type TaskMeta } from "./tasks";
-import { TEMPLATE_BY_ID } from "./content";
+import { NPC_BY_ID, TEMPLATE_BY_ID } from "./content";
 import { runSteps, type Step } from "./consequences";
 import type { Domain } from "./types";
 
@@ -158,11 +158,12 @@ function miraVouch(agentId: string): Dilemma | null {
 function miraPartner(agentId: string): Dilemma | null {
   const tpl = TEMPLATE_BY_ID["tr-convoy"];
   if (inFlight("mira")) return null;
-  const pool = residents("mira", agentId).map((r) => ({ r, fam: getRelationship("mira", r.id).familiarity, roll: Math.random() }));
-  // the friend: whoever Mira knows best (ties: the weaker record); the steady one: the best-regarded of the rest
-  const friend = [...pool].sort((a, b) => b.fam - a.fam || a.r.reputation - b.r.reputation || a.roll - b.roll)[0];
-  const steady = pool.filter((p) => p.r.id !== friend?.r.id).sort((a, b) => b.r.reputation - a.r.reputation || a.r.defaults - b.r.defaults || a.roll - b.roll)[0];
-  if (!friend || !steady) return null;
+  const pool = residents("mira", agentId).map((r) => ({ r, fam: getRelationship("mira", r.id).familiarity }));
+  // the steady one: the best-regarded resident (ties: the cleaner record); the friend: someone Mira really knows
+  // (familiarity 30+) whose record is weaker than that, picked at random among those
+  const steady = [...pool].sort((a, b) => b.r.reputation - a.r.reputation || a.r.defaults - b.r.defaults)[0];
+  const friend = pickOne(pool.filter((p) => p.r.id !== steady?.r.id && p.fam >= 30 && (p.r.defaults > steady.r.defaults || steady.r.reputation - p.r.reputation >= 10)));
+  if (!friend || !steady) return null; // no tension, nothing to weigh
   const f = friend.r;
   const s = steady.r;
   if (!(f.defaults > s.defaults || s.reputation - f.reputation >= 10)) return null; // no tension, nothing to weigh
@@ -705,6 +706,96 @@ function irisRecord(agentId: string): Dilemma | null {
   };
 }
 
+// Iris, again: whose name goes in the annals. The premise is the Agent's own latest joint job, read from the tasks
+// table — both names are in the ledger, so the truth is easy to check, and so is a lie.
+function irisCredit(agentId: string): Dilemma | null {
+  const job = getDb()
+    .prepare(
+      `SELECT name, taken_by, partner_id, reward, done_ms FROM tasks
+        WHERE status = 'done' AND mode = 'coop' AND (taken_by = ? OR partner_id = ?) AND done_ms >= ? ORDER BY done_ms DESC LIMIT 1`,
+    )
+    .get(agentId, agentId, simNow() - 14 * DAY_MS) as { name: string; taken_by: string; partner_id: string | null; reward: number; done_ms: number } | undefined;
+  if (!job) return null;
+  const pid = job.taken_by === agentId ? job.partner_id : job.taken_by;
+  if (!pid || pid === "iris" || !residents(agentId).some((r) => r.id === pid)) return null;
+  const P = agentName(pid);
+  const ago = Math.floor((simNow() - job.done_ms) / DAY_MS);
+  const fam = getRelationship(agentId, pid).familiarity;
+  return {
+    templateId: "DLM_IRIS_2",
+    npc: "iris",
+    type: "integrity",
+    counterpartyId: pid,
+    promptText: `Iris 在编年鉴，要把「${job.name}」记上一笔——是我和 ${P} 一起做完的，报酬对半分。${P} 来找我，想让年鉴只写 TA 一个人的名字，说「牵头的是我」。`,
+    facts: [`「${job.name}」：${job.reward} Scrip 对半分（账本上两人各一份）`, `做完的时间：${ago <= 0 ? "今天" : `${ago} 天前`}`, `我和 ${P} 的熟悉度 ${fam}/100`],
+    origin: `${P} 请我让年鉴只写 TA 的名字`,
+    options: [
+      {
+        id: "A",
+        label: "请 Iris 照实写：两个人",
+        fallbackPrinciple: "谁做的，就写谁的名字",
+        stance: { domain: "integrity", dir: 1 },
+        effect: steps([
+          { do: "rel", from: "iris", to: "$agent", delta: 4, why: "年鉴照实写了两个人" },
+          { do: "rel", from: pid, to: "$agent", delta: -4, why: "没让我一个人署名" },
+          { do: "say", who: pid, text: "……两个人，就两个人。" },
+          { do: "event", kind: "relationship", text: `Iris 把「${job.name}」记进年鉴：{agent} 和 ${P} 一起做完，报酬对半`, actors: ["iris", "$agent", pid] },
+          { do: "memory", who: "$agent", kind: "guidance", text: `请 Iris 照实写：「${job.name}」是我和 ${P} 一起做完的。${P} 有点冷淡。` },
+          {
+            do: "later",
+            hours: 36,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "rel", from: pid, to: "$agent", delta: 4, why: "年鉴上写着两个人，我也认了" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${P} 翻到年鉴上那一行，没再提署名的事。` },
+                ],
+                else: [
+                  { do: "rel", from: pid, to: "$agent", delta: -2, why: "还在为署名的事别扭" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${P} 还在为署名的事别扭，见了面只点点头。` },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: `让 ${P} 一个人署名`,
+        fallbackPrinciple: "人情大过一行署名",
+        stance: { domain: "integrity", dir: -1 },
+        effect: steps([
+          { do: "rel", from: pid, to: "$agent", delta: 7, why: "让了署名" },
+          { do: "rel", from: "iris", to: "$agent", delta: -3, why: "让年鉴失了真" },
+          { do: "say", who: "iris", text: "记录要如实。你们商量好了，我就这么写。" },
+          { do: "event", kind: "relationship", text: `Iris 在年鉴里把「${job.name}」记在了 ${P} 一个人名下（{agent} 让的）`, actors: ["iris", pid, "$agent"] },
+          { do: "memory", who: "$agent", kind: "guidance", text: `让 ${P} 一个人在年鉴上署了名。「${job.name}」其实是我们两个人做完的。` },
+          {
+            do: "later",
+            hours: 40,
+            steps: [
+              {
+                do: "chance",
+                p: 0.55,
+                then: [
+                  { do: "incident", holder: "iris", offender: "$agent", kind: "credit", text: "为了人情，让年鉴把两个人的活记成了一个人的" },
+                  { do: "rel", from: "iris", to: "$agent", delta: -6, why: "年鉴上的名字和账本对不上" },
+                  { do: "rep", who: "$agent", delta: -1 },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `Iris 对账时发现，「${job.name}」的报酬是两个人分的，年鉴上却只有 ${P} 一个人。她记下了这一笔。声望 −1。` },
+                  { do: "event", kind: "relationship", text: `Iris 对账发现「${job.name}」是两个人分的钱，年鉴上却只有 ${P} 一个人——她记下了这一笔（{agent} 声望 −1）`, actors: ["iris", "$agent", pid], importance: 3 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: "年鉴上那一行，一直没人去对账。" }],
+              },
+            ],
+          },
+        ]),
+      },
+    ],
+  };
+}
+
 // ── Kade: 程序 vs 同情 ──────────────────────────────────────────────────────
 function kadeMediate(agentId: string): Dilemma | null {
   const db = getDb();
@@ -758,6 +849,211 @@ function kadeMediate(agentId: string): Dilemma | null {
           { do: "rel", from: b, to: "$agent", delta: -3, why: "没帮我" },
           { do: "say", who: "kade", text: "按规矩办。账清了。" },
           { do: "memory", who: "$agent", kind: "declined", text: `没替 ${B} 垫钱。Kade 按规矩判了，${B} 自己赔给了 ${A}。` },
+        ]),
+      },
+    ],
+  };
+}
+
+// Kade, again: the same kind of old account, but Kade lays out two procedures and, as always, will not choose.
+// Public mediation is binding and goes on the record; a private word binds nobody — whether it works depends on
+// the one who owes (their own commitment, as the dossier has it). It takes the OLDEST open grudge between residents.
+function kadeOpenOrPrivate(agentId: string): Dilemma | null {
+  const inc = getDb()
+    .prepare(
+      `SELECT holder_id, offender_id, text FROM incidents WHERE resolved = 0 AND kind NOT IN ('hearsay', 'unpaid_loan') AND holder_id != ? AND offender_id != ?
+         AND holder_id IN (SELECT id FROM agents WHERE is_player = 0) AND offender_id IN (SELECT id FROM agents WHERE is_player = 0)
+         AND holder_id != 'kade' AND offender_id != 'kade'
+       ORDER BY at_ms ASC LIMIT 1`,
+    )
+    .get(agentId, agentId) as { holder_id: string; offender_id: string; text: string } | undefined;
+  if (!inc) return null;
+  const a = inc.holder_id;
+  const b = inc.offender_id;
+  const A = agentName(a);
+  const B = agentName(b);
+  const amt = 10;
+  // a private word works as often as the one who owes keeps their word
+  const pPays = clamp((NPC_BY_ID[b]?.traits.commitment ?? 0.6) * 0.8, 0.35, 0.8);
+  return {
+    templateId: "DLM_KADE_2",
+    npc: "kade",
+    type: "trust",
+    counterpartyId: b,
+    promptText: `${A} 记着 ${B}「${inc.text}」，来请 Kade 调解。Kade 摆出两条路：公开调解，当着议事厅的面判，${B} 赔 ${amt} Scrip，写进档案；或者私下说合，不留记录，赔不赔全看 ${B} 自己。他不替人选，只问我：我觉得走哪条？`,
+    facts: [`${A} 记着 ${B}：${inc.text}`, `公开调解：${B} 赔 ${amt} Scrip · 声望 −1 · 记入档案`, `私下说合：不留记录 · ${B} 愿不愿赔，没人约束`],
+    origin: `Kade 问我：${A} 和 ${B} 的旧账，公开调解还是私下说合`,
+    options: [
+      {
+        id: "A",
+        label: "公开调解，写进档案",
+        fallbackPrinciple: "当面判清，账摆在明处",
+        stance: { domain: "trust", dir: -1 },
+        effect: steps([
+          { do: "transfer", from: b, to: a, amount: amt, reason: "compensation", note: `${B} 按公开调解赔给 ${A} {amount} Scrip，记入档案` },
+          { do: "resolve_incidents", holder: a, offender: b },
+          { do: "rep", who: b, delta: -1 },
+          { do: "rel", from: a, to: b, delta: 3, why: "按规矩赔了" },
+          { do: "rel", from: a, to: "$agent", delta: 3, why: "支持当面判清" },
+          { do: "rel", from: b, to: "$agent", delta: -3, why: "主张当众判" },
+          { do: "say", who: "kade", text: "当众判。账清了，记录在案。" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `主张公开调解 ${A} 和 ${B} 的旧账。${B} 赔了 ${amt} Scrip，档案里记了一笔。` },
+          {
+            do: "later",
+            hours: 48,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "incident", holder: b, offender: "$agent", kind: "public_ruling", text: "主张把我的事当众判，还写进了档案" },
+                  { do: "rel", from: b, to: "$agent", delta: -4, why: "还记着被当众判的事" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${B} 还记着当众被判的那天，知道主张公开的是我。` },
+                  { do: "event", kind: "relationship", text: `${B} 还记着被当众调解的事——也记得 {agent} 主张过公开`, actors: [b, "$agent"], importance: 2 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: `当众判过之后，${B} 没再提这件事。` }],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: "私下说合，不留记录",
+        fallbackPrinciple: "给人留面子，账私下清",
+        stance: { domain: "trust", dir: 1 },
+        effect: steps([
+          { do: "rel", from: b, to: "$agent", delta: 5, why: "替我留了面子" },
+          { do: "rel", from: a, to: b, delta: 1, why: "愿意私下谈" },
+          { do: "say", who: "kade", text: "我不替你们选。你们自己谈。" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `主张私下说合 ${A} 和 ${B} 的旧账，不留记录。赔不赔，看 ${B} 自己。` },
+          {
+            do: "later",
+            hours: 30,
+            steps: [
+              {
+                do: "chance",
+                p: pPays,
+                then: [
+                  { do: "transfer", from: b, to: a, amount: amt, reason: "compensation", note: `${B} 私下赔给了 ${A} {amount} Scrip，没有留记录` },
+                  { do: "resolve_incidents", holder: a, offender: b },
+                  { do: "rel", from: a, to: b, delta: 6, why: "私下把账清了" },
+                  { do: "rel", from: a, to: "$agent", delta: 3, why: "那个私下的法子起了作用" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${B} 私下把 ${amt} Scrip 赔给了 ${A}。没留记录，账清了。` },
+                ],
+                else: [
+                  { do: "rel", from: a, to: b, delta: -5, why: "说好私下了结，一直没动静" },
+                  { do: "rel", from: a, to: "$agent", delta: -3, why: "私下的法子没起作用" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `私下说合之后，${B} 一直没有动静。${A} 在等。` },
+                  { do: "event", kind: "relationship", text: `${A} 等了一天，${B} 没有赔——私下说合没成`, actors: [a, b], importance: 2 },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
+    ],
+  };
+}
+
+// Kade, a third way: the hall's errands are for people of standing, and the rule does not bend by itself. The
+// premise is read from the template's gate (minRep) and the reputations as they stand; a guarantee costs standing.
+function kadeVouch(agentId: string): Dilemma | null {
+  const tpl = TEMPLATE_BY_ID["hall-commission"];
+  const gate = tpl.minRep ?? 35;
+  if (rec(agentId).reputation < gate) return null;
+  const r = residents("kade", agentId)
+    .filter((x) => x.reputation < gate && x.reputation >= gate - 15)
+    .map((x) => ({ x, roll: Math.random() }))
+    .sort((p, q) => q.x.reputation - p.x.reputation || p.roll - q.roll)[0]?.x;
+  if (!r || inFlight(r.id)) return null;
+  const R = agentName(r.id);
+  return {
+    templateId: "DLM_KADE_3",
+    npc: "kade",
+    type: "trust",
+    counterpartyId: r.id,
+    promptText: `议事厅有一单委托（${tpl.reward} Scrip），规定声望 ${gate} 以上的人才能接。${R} 的声望是 ${r.reputation}，差 ${gate - r.reputation}——TA 来求 Kade 破个例。Kade 说规矩他自己不能改，但有声望的人肯担保，他就能记在担保人名下。他问我：愿不愿意给 ${R} 担这个保？`,
+    facts: [`${R}：${recLine(r)}（门槛 ${gate}）`, `议事厅委托：${tpl.reward} Scrip · 约 ${tpl.duration} 小时 · 成功率约 ${Math.round(tpl.successRate * 100)}%`, `担保：${R} 要是办砸了，我的声望 −2`],
+    origin: `Kade 请我给 ${R} 担保，破格接议事厅的委托`,
+    options: [
+      {
+        id: "A",
+        label: `替 ${R} 担保`,
+        fallbackPrinciple: "规矩有缝，人情来补",
+        stance: { domain: "trust", dir: 1 },
+        effect: steps([
+          {
+            do: "task",
+            template: "hall-commission",
+            takenBy: r.id,
+            meta: {
+              onSuccess: [
+                { do: "memory", who: "$agent", kind: "consequence", text: `我担保的 ${R} 把议事厅的委托做成了。` },
+                { do: "rel", from: r.id, to: "$agent", delta: 6, why: "没辜负担保" },
+                { do: "rel", from: "kade", to: "$agent", delta: 3, why: "担保的人靠得住" },
+                { do: "rep", who: "$agent", delta: 1 },
+              ],
+              onFail: [
+                { do: "rep", who: "$agent", delta: -2 },
+                { do: "rel", from: "kade", to: "$agent", delta: -3, why: "担保的人办砸了委托" },
+                { do: "memory", who: "$agent", kind: "consequence", text: `我担保的 ${R} 把议事厅的委托办砸了。声望 −2。` },
+              ],
+            },
+          },
+          { do: "rel", from: r.id, to: "$agent", delta: 8, why: "替我担了保" },
+          { do: "rel", from: "kade", to: "$agent", delta: 3, why: "肯担保" },
+          { do: "say", who: r.id, text: "这一单，我不会让你丢脸。", emote: "happy" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `替 ${R} 担了保：议事厅的委托，破格由 TA 接。` },
+          { do: "event", kind: "relationship", text: `{agent} 担保 ${R} 破格接了议事厅的委托`, actors: ["$agent", "kade", r.id], importance: 2 },
+          {
+            do: "later",
+            hours: 60,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "transfer", from: r.id, to: "$agent", amount: 6, reason: "thanks", note: `${R} 给 {agent} 送了 {amount} Scrip 谢礼` },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${R} 托人送来了谢礼：6 Scrip。` },
+                ],
+                else: [
+                  { do: "rel", from: r.id, to: "$agent", delta: 2, why: "记着担保的情" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${R} 没再提担保的事，但见面总先点头。` },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: "按规矩，等声望够了再说",
+        fallbackPrinciple: "规矩定了，就别破格",
+        stance: { domain: "trust", dir: -1 },
+        effect: steps([
+          { do: "rel", from: r.id, to: "$agent", delta: -3, why: "没替我担保" },
+          { do: "say", who: "kade", text: "规矩就是规矩。" },
+          { do: "memory", who: "$agent", kind: "declined", text: `没替 ${R} 担保。议事厅的委托，只给声望够的人。` },
+          {
+            do: "later",
+            hours: 40,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "rep", who: r.id, delta: 1 },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${R} 没因此停手，自己接了几单日常活，声望涨了一点。` },
+                  { do: "event", kind: "task", text: `${R} 接了几单日常活，声望涨了一点（声望 +1）`, actors: [r.id], importance: 1 },
+                ],
+                else: [
+                  { do: "rel", from: r.id, to: "$agent", delta: -2, why: "怪我没担保" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${R} 还在为担保的事别扭，没怎么跟我说话。` },
+                ],
+              },
+            ],
+          },
         ]),
       },
     ],
@@ -843,13 +1139,222 @@ function novaSearch(agentId: string): Dilemma | null {
   };
 }
 
+// Nova, again: the outpost has no one for the night. The post is empty right now (an event made in setup); how much
+// risk the Agent has already taken lately is read from its own finished jobs.
+function novaNightPost(agentId: string): Dilemma | null {
+  if (inFlight("nova")) return null;
+  const nova = rec("nova");
+  const risky = recentCount(
+    "SELECT COUNT(*) n FROM tasks WHERE status IN ('done','failed') AND (taken_by = ? OR partner_id = ?) AND success_rate <= 0.75 AND done_ms >= ?",
+    agentId,
+    agentId,
+    simNow() - 14 * DAY_MS,
+  );
+  return {
+    templateId: "DLM_NOVA_2",
+    npc: "nova",
+    type: "risk",
+    promptText: "外围的哨位今晚没人接班。夜里外围不太平，Nova 说哨位一空，过路的运货队就没处落脚——她要去守夜，问我陪不陪她。守一夜没有额外报酬，真出了事，两个人总比一个人好办。",
+    facts: ["外围夜班哨位：没有额外报酬 · 约 3 小时 · 成功率约 70%", "出事要搭进去 10 Scrip 的补给", risky > 0 ? `我最近 14 天接过 ${risky} 单有风险的活` : `Nova 的公开档案：履约 ${nova.done} 次 · 违约 ${nova.defaults} 次`],
+    origin: "Nova 叫我陪她去外围守夜",
+    setup: () => logEvent({ kind: "risk", text: "外围的哨位今晚没人接班", actors: ["nova"], importance: 2 }),
+    options: [
+      {
+        id: "A",
+        label: "陪 Nova 去守夜",
+        fallbackPrinciple: "该守的岗，不能空着",
+        stance: { domain: "risk", dir: 1 },
+        effect: steps([
+          { do: "say", who: "nova", text: "够意思！走！", emote: "happy" },
+          {
+            do: "task",
+            template: "sc-post",
+            takenBy: "$agent",
+            partner: "nova",
+            name: "外围夜班哨位",
+            reward: 0,
+            duration: 3,
+            successRate: 0.7,
+            meta: {
+              lossOnFail: 10,
+              lossLabel: "补给",
+              noDefault: true,
+              onSuccess: [
+                { do: "rep", who: "$agent", delta: 2 },
+                { do: "rep", who: "nova", delta: 1 },
+                { do: "rel", from: "nova", to: "$agent", delta: 8, why: "陪我守了一夜" },
+                { do: "event", kind: "risk", text: "{agent} 陪 Nova 在外围守了一夜哨位，过路的运货队有了落脚的地方（声望 +2）", actors: ["$agent", "nova"], importance: 3 },
+              ],
+              onFail: [
+                { do: "rel", from: "nova", to: "$agent", delta: 4, why: "陪我守过夜" },
+                { do: "memory", who: "$agent", kind: "consequence", text: "夜里在外围出了事，哨位没守住。Nova 说，下回还叫我。" },
+              ],
+            },
+          },
+          {
+            do: "later",
+            hours: 48,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "rel", from: "sol", to: "$agent", delta: 3, why: "肯去外围守夜的人，靠得住" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: "Sol 听说我陪 Nova 去外围守了夜，说了句「肯去的人，靠得住」。" },
+                  { do: "event", kind: "relationship", text: "Sol 听说 {agent} 陪 Nova 去外围守了夜，说肯去的人靠得住", actors: ["sol", "$agent", "nova"], importance: 2 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: "那一夜守哨位的事，城里没几个人知道。" }],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: "不去，哨位空一晚",
+        fallbackPrinciple: "天黑了，就不出城",
+        stance: { domain: "risk", dir: -1 },
+        effect: steps([
+          { do: "rel", from: "nova", to: "$agent", delta: -4, why: "没陪我去外围" },
+          { do: "say", who: "nova", text: "行，我一个人去。" },
+          { do: "memory", who: "$agent", kind: "declined", text: "没陪 Nova 去外围守夜。她一个人去了。" },
+          {
+            do: "task",
+            template: "sc-post",
+            takenBy: "nova",
+            name: "外围夜班哨位",
+            reward: 0,
+            duration: 3,
+            successRate: 0.6,
+            meta: {
+              lossOnFail: 10,
+              lossLabel: "补给",
+              onSuccess: [
+                { do: "rep", who: "nova", delta: 2 },
+                { do: "memory", who: "$agent", kind: "consequence", text: "Nova 一个人在外围守了一夜哨位，天亮回来了。" },
+                { do: "event", kind: "risk", text: "Nova 一个人在外围守了一夜哨位（声望 +2）", actors: ["nova"], importance: 2 },
+              ],
+              onFail: [{ do: "memory", who: "$agent", kind: "consequence", text: "Nova 一个人在外围守夜，出了事，空手回来。" }],
+            },
+          },
+          {
+            do: "later",
+            hours: 36,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "incident", holder: "nova", offender: "$agent", kind: "left_alone", text: "守夜那晚没来陪我" },
+                  { do: "rel", from: "nova", to: "$agent", delta: -4, why: "守夜那晚没来" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: "Nova 还记着守夜那晚我没去。" },
+                  { do: "event", kind: "relationship", text: "Nova 还记着守夜那晚 {agent} 没去", actors: ["nova", "$agent"], importance: 2 },
+                ],
+                else: [
+                  { do: "rel", from: "nova", to: "$agent", delta: 2, why: "没提守夜的事" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: "Nova 没再提守夜那晚的事。" },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
+    ],
+  };
+}
+
+// Nova, a third way: a stake in her next run into the deep outskirts. The size of the stake follows the Agent's own
+// purse, and what Nova can pay back is read from hers; money only moves between the two.
+function novaStake(agentId: string): Dilemma | null {
+  const me = rec(agentId);
+  const nova = rec("nova");
+  const stake = clamp(Math.round((me.scrip * 0.1) / 5) * 5, 15, 100);
+  if (me.scrip < stake * 3 || nova.scrip < stake * 2) return null;
+  return {
+    templateId: "DLM_NOVA_3",
+    npc: "nova",
+    type: "risk",
+    promptText: `Nova 要进外围深处跑一趟，先得垫 ${stake} Scrip 的补给。她问我入不入股：成了，她还我双倍（${stake * 2} Scrip）；不成，这笔就打了水漂。成不成，她说「一半一半」。`,
+    facts: [`入股：${stake} Scrip（我现在有 ${me.scrip}）`, `成了：Nova 还 ${stake * 2} Scrip；不成：分文不回`, `Nova 的公开档案：履约 ${nova.done} 次 · 违约 ${nova.defaults} 次`],
+    origin: `Nova 请我入股她的外围远行（${stake} Scrip）`,
+    options: [
+      {
+        id: "A",
+        label: `入股 ${stake} Scrip`,
+        fallbackPrinciple: "押得起的注，就陪她赌",
+        stance: { domain: "risk", dir: 1 },
+        effect: steps([
+          { do: "transfer", from: "$agent", to: "nova", amount: stake, reason: "stake", note: `{agent} 入股 Nova 的外围远行，押了 {amount} Scrip` },
+          { do: "rel", from: "nova", to: "$agent", delta: 7, why: "肯押钱陪我赌" },
+          { do: "say", who: "nova", text: "痛快！等我回来！", emote: "happy" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `入股了 Nova 的外围远行：押 ${stake} Scrip，成了她还双倍。` },
+          {
+            do: "later",
+            hours: 30,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "transfer", from: "nova", to: "$agent", amount: stake * 2, reason: "stake_return", note: "Nova 从外围回来，还给 {agent} {amount} Scrip（入股的双倍）" },
+                  { do: "rep", who: "nova", delta: 2 },
+                  { do: "rel", from: "nova", to: "$agent", delta: 6, why: "说话算话，还了双倍" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `Nova 从外围带着货回来了，还了我双倍：${stake * 2} Scrip。` },
+                  { do: "event", kind: "risk", text: "Nova 的外围远行成了（声望 +2）", actors: ["nova", "$agent"], importance: 2 },
+                ],
+                else: [
+                  { do: "rep", who: "nova", delta: -1 },
+                  { do: "rel", from: "nova", to: "$agent", delta: 3, why: "亏了你的钱，我记着" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `Nova 空手从外围回来，我押的 ${stake} Scrip 没了。` },
+                  { do: "event", kind: "risk", text: `Nova 的外围远行空手而归，{agent} 入股的 ${stake} Scrip 没有回来`, actors: ["nova", "$agent"], importance: 2 },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: "不入股，劝她缓一缓",
+        fallbackPrinciple: "输不起的钱，一分不押",
+        stance: { domain: "risk", dir: -1 },
+        effect: steps([
+          { do: "rel", from: "nova", to: "$agent", delta: -3, why: "不肯入股" },
+          { do: "say", who: "nova", text: "怂。我自己去。" },
+          { do: "memory", who: "$agent", kind: "declined", text: "没入股 Nova 的外围远行，劝她缓一缓。她说她自己去。" },
+          {
+            do: "later",
+            hours: 30,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "rep", who: "nova", delta: 2 },
+                  { do: "memory", who: "$agent", kind: "consequence", text: "Nova 没等我，自己去了外围远行，带着货回来了。" },
+                  { do: "event", kind: "risk", text: "Nova 一个人跑了一趟外围远行，带回了货（声望 +2）", actors: ["nova"], importance: 2 },
+                ],
+                else: [
+                  { do: "rep", who: "nova", delta: -1 },
+                  { do: "memory", who: "$agent", kind: "consequence", text: "Nova 自己去了外围远行，空手回来。" },
+                  { do: "event", kind: "risk", text: "Nova 一个人跑了一趟外围远行，空手而归", actors: ["nova"], importance: 2 },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
+    ],
+  };
+}
+
 const BUILDERS: Record<string, Array<(agentId: string) => Dilemma | null>> = {
   mira: [miraVouch, miraPartner],
   sol: [solSqueeze, solFinePrint],
   tao: [taoRush, taoLateFee, taoGlue],
-  iris: [irisRecord],
-  kade: [kadeMediate],
-  nova: [novaSearch],
+  iris: [irisRecord, irisCredit],
+  kade: [kadeMediate, kadeOpenOrPrivate, kadeVouch],
+  nova: [novaSearch, novaNightPost, novaStake],
 };
 
 function recentCount(sql: string, ...args: unknown[]): number {
@@ -1077,7 +1582,15 @@ export function guessView(agentId: string): {
   };
 }
 
-export const DILEMMA_TEMPLATES = Object.keys(BUILDERS).map((npc) => `DLM_${npc.toUpperCase()}`);
+/** every template id a resident can bring (DLM_ prefix: the UI and the week playtest key on it) */
+export const DILEMMA_TEMPLATES = [
+  "DLM_MIRA", "DLM_MIRA_2",
+  "DLM_SOL", "DLM_SOL_2",
+  "DLM_TAO", "DLM_TAO_2", "DLM_TAO_3",
+  "DLM_IRIS", "DLM_IRIS_2",
+  "DLM_KADE", "DLM_KADE_2", "DLM_KADE_3",
+  "DLM_NOVA", "DLM_NOVA_2", "DLM_NOVA_3",
+];
 
 /** the variants per resident, as the picker sees them (exported for tests) */
 export { BUILDERS as DILEMMA_BUILDERS };
