@@ -21,7 +21,7 @@
 // Open the result:  npm run dev:test        (it reads ./polis-test.db)
 //        any other path:  POLIS_TEST_MODE=1 POLIS_DB_PATH=<path> npx next dev
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { findChains } from "./causal-chains.mjs";
@@ -33,7 +33,7 @@ const PITCH_HELP = "the investor-demo save: a bold guardian's days 1-9, daytime 
 const ALL_NAMES = [...SCENARIO_NAMES, PITCH];
 
 function parseArgs(argv) {
-  const out = { _: [], force: false, list: false, db: "./polis-test.db", policy: "careful", name: undefined, tries: 3, extraHours: 30, rewind: false };
+  const out = { _: [], force: false, list: false, db: "./polis-test.db", policy: "careful", name: undefined, tries: 4, extraHours: 30, rewind: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--force") out.force = true;
@@ -61,7 +61,7 @@ function usage() {
   console.log(`  ${PITCH.padEnd(11)} ${PITCH_HELP}`);
   console.log(`\n  --db      save to create (default ./polis-test.db, the one \`npm run dev:test\` opens)`);
   console.log(`  --force   overwrite an existing save (without it the script refuses)`);
-  console.log(`  pitch only:  --tries N (full rebuilds if the world did not give a good demo, default 3)`);
+  console.log(`  pitch only:  --tries N (full rebuilds if the world did not give a good demo, default 4)`);
   console.log(`               --extra-hours N (hours to keep looking for a daytime with something pending, default 30)`);
   console.log(`               --rewind (re-align the sim clock of an existing pitch save; run it with the dev server stopped)`);
 }
@@ -315,8 +315,12 @@ function pitchReport(dbPath, state) {
 
   // hearsay + loans
   const hearsay = db.prepare("SELECT * FROM incidents WHERE kind = 'hearsay' ORDER BY at_ms").all();
+  // what the 关系 tab of the Agent can show right now: unresolved hearsay naming its source ("听 X 说：…")
+  const seen = p.relationships.flatMap((r) => r.incidents.filter((i) => /听 .+ 说：/.test(i.text)).map((i) => ({ who: nm(r.otherId), text: i.text })));
   core.hearsay = hearsay.length > 0;
-  lines.push(`hearsay      ${hearsay.length} (incidents.kind='hearsay'; 关系 tab shows the source)`);
+  core.hearsayOnScreen = seen.length > 0;
+  lines.push(`hearsay      ${hearsay.length} rows (incidents.kind='hearsay'), ${seen.length} still on the 关系 tab`);
+  for (const h of seen.slice(0, 3)) lines.push(`  on screen: [${h.who}] ${cut(h.text, 80)}`);
   for (const h of hearsay.slice(0, 3)) lines.push(`  ${D(h.at_ms)} incidents#${h.id} ${nm(h.holder_id)} about ${nm(h.offender_id)}: ${cut(h.text, 70)}`);
   const purchases = db.prepare("SELECT id, at_ms, payload_json FROM metric_events WHERE name = 'purchase' ORDER BY at_ms").all().map((r) => ({ id: r.id, at: r.at_ms, ...JSON.parse(r.payload_json) }));
   const lent = purchases.filter((x) => x.lender);
@@ -326,9 +330,11 @@ function pitchReport(dbPath, state) {
   try {
     // same rows, same code as `node scripts/causal-chains.mjs <db>`
     const { shown, chains, when } = findChains(db);
-    const pick = shown.length ? shown : chains.filter((c) => c.links.length >= 2);
-    lines.push(`chains       ${shown.length} full chain(s) of ${chains.length} traced  (node scripts/causal-chains.mjs <db>)`);
-    for (const c of pick.slice(0, 2)) {
+    const pool = shown.length ? shown : chains.filter((c) => c.links.length >= 2);
+    // the longest chain of each kind (a wrong that travelled, a loan that was paid back or not)
+    const pick = ["A", "B"].map((k) => pool.find((c) => c.kind === k)).filter(Boolean);
+    lines.push(`chains       ${shown.length} full chain(s) of ${chains.length} traced  (node scripts/causal-chains.mjs <db>; chains of one kind can overlap)`);
+    for (const c of pick) {
       lines.push(`  [${c.kind}] ${c.title} — ${c.people.size} people`);
       for (const l of c.links.slice(0, 5)) lines.push(`    ${when(l.at).padEnd(8)} ${l.row.padEnd(18)} ${cut(l.text, 80)}`);
     }
@@ -343,11 +349,11 @@ function pitchReport(dbPath, state) {
   for (const r of recaps.slice(0, 1)) {
     const ls = JSON.parse(r.lines_json);
     const watch = ls.find((l) => l.startsWith("下周看点"));
-    lines.push(`  下周看点: ${watch ? cut(watch, 100) : "none in this volume (nothing open to watch)"}`);
+    lines.push(`  下周看点: ${watch ? cut(watch, 100) : "none in volume 1 — it first appears in volume 2 (night of day 14)"}`);
   }
   lines.push(`progression  ${p.progression.title} · rep ${p.progression.reputation} · epithets ${p.progression.epithets.map((e) => e.label).join("/") || "—"} · 默契 ${p.attunement.correct}/${p.attunement.total} · imprint slots ${p.imprintSlots.used}/${p.imprintSlots.total}`);
   db.close();
-  const score = Object.values(core).filter(Boolean).length * 10 + (core.hearsay ? 5 : 0);
+  const score = Object.values(core).filter(Boolean).length * 10;
   return { lines, core, score };
 }
 
@@ -360,6 +366,34 @@ function pendingLines(s) {
   out.push(`postcards    ${p.postcards.unread} unread: ${p.postcards.items.filter((c) => !c.read).map((c) => c.title).join(" | ") || "—"}`);
   out.push(`scrip        ${p.agent.scrip} (强制执行 costs 30 Scrip; ${p.agent.scrip >= 30 ? "affordable" : "NOT enough for a live force"})`);
   return out;
+}
+
+/**
+ * Which answer to the first pending fork makes the Agent push back? Asked of THROW-AWAY COPIES of the save (one server
+ * per option, through POST /api/decisions/:id/choose, the same call the UI makes); the real save is not touched.
+ * The rules engine is deterministic for a given state, so the real save answers the same way.
+ */
+async function probeFirstFork(dbPath, state) {
+  const m = state.player.pendingMoments[0];
+  if (!m) return null;
+  const rows = [];
+  for (const [i, o] of m.options.entries()) {
+    const copy = dbPath.replace(/\.db$/, "") + `.probe${i}.db`;
+    removeDbFiles(copy);
+    copyFileSync(dbPath, copy);
+    const server = await startDevServer({ dbPath: copy, llm: "off", distDir: process.env.PLAYTEST_DIST_DIR || ".next-scenario" });
+    try {
+      const r = await apiClient(server.base)("POST", `/api/decisions/${m.id}/choose`, { optionId: o.id });
+      const j = r.json?.judgment;
+      rows.push({ label: o.label, status: r.status, decision: j?.decision ?? null, text: j?.to_player ?? null });
+    } catch (e) {
+      rows.push({ label: o.label, status: 0, decision: null, text: `probe failed: ${e.message}` });
+    } finally {
+      await server.stop();
+      removeDbFiles(copy);
+    }
+  }
+  return { fork: `${m.templateId} (${m.speakerId ?? "?"})`, rows };
 }
 
 async function pitchMain(args, dbPath) {
@@ -419,6 +453,8 @@ async function pitchMain(args, dbPath) {
   renameSync(best.path, dbPath);
   for (const suf of ["-wal", "-shm"]) if (existsSync(best.path + suf)) renameSync(best.path + suf, dbPath + suf);
   const s = best.res.state;
+  console.log("\nprobing the first pending fork on throw-away copies (which answer makes the Agent push back)...");
+  const probe = await probeFirstFork(dbPath, s).catch((e) => ({ fork: "?", rows: [{ label: "-", text: `probe failed: ${e.message}` }] }));
   writeFileSync(
     dbPath + ".pitch.json",
     JSON.stringify({ simNowMs: s.world.simNowMs, offsetMs: s.world.offsetMs, builtAtRealMs: Date.now(), hour: s.world.hour, dayIndex: s.player.dayIndex }, null, 2),
@@ -429,6 +465,10 @@ async function pitchMain(args, dbPath) {
   console.log(`\nPENDING for the presenter (daytime + something to do: ${best.res.good ? "yes" : "NO"})`);
   for (const l of pendingLines(s)) console.log(`  ${l}`);
   if (!best.res.good) console.log("  NOTE: no hour in the search window had a fork / 默契 guess + an unread postcard in daytime. Use the fallback in doc/DEMO.md, or rebuild with --tries 5 --extra-hours 48.");
+  if (probe) {
+    console.log(`\nIF THE PRESENTER ANSWERS ${probe.fork} FIRST (probe on copies, offline rules engine)`);
+    for (const r of probe.rows) console.log(`  「${r.label}」 -> ${r.decision ?? "no judgment"}${r.text ? `: ${r.text.slice(0, 110)}` : ""}`);
+  }
   console.log("\nWHAT TO SHOW (read from this save's rows)");
   for (const l of best.report.lines) console.log(`  ${l}`);
   if (best.missing.length) console.log(`\n  NOTE: this build lacks: ${best.missing.join(", ")}. Run it again with --force for another roll of the world.`);
