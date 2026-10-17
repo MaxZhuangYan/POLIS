@@ -14,7 +14,11 @@
 //  * the Agent asks only when it cannot decide alone (no principle, principles
 //    in conflict, or the resident is close to it); otherwise it decides by its
 //    imprint, cites it, and the postcard tells the story;
-//  * from day 4; at most one a day; each resident at most twice a week.
+//  * from day 4; at most one a day; each resident at most twice a week;
+//  * a resident has several ways to bring the same conflict (BUILDERS[npc] is a
+//    list): the Agent is shown the variant it has seen least, so weeks three
+//    and four are not the first week replayed. Variant ids are DLM_<NPC> (the
+//    original, kept for old saves) and DLM_<NPC>_2, _3 … — the UI keys on DLM_.
 // ---------------------------------------------------------------------------
 
 import { getDb } from "./db";
@@ -22,9 +26,9 @@ import { simNow, DAY_MS, HOUR_MS, localDayBounds, nextLocalHour } from "./clock"
 import { agentName, getRelationship, logEvent, metric, openIncidents, playerDayIndex, remember, say } from "./records";
 import { canAsk, canDecideAlone, insertMoment, optionForDir, applyEffect, type MomentOption, type MomentRow } from "./decisionMoments";
 import { logCitation } from "./principleEngine";
-import { createTask, scheduleEvent } from "./tasks";
+import { createTask, scheduleEvent, type TaskMeta } from "./tasks";
 import { TEMPLATE_BY_ID } from "./content";
-import type { Step } from "./consequences";
+import { runSteps, type Step } from "./consequences";
 import type { Domain } from "./types";
 
 interface Dilemma {
@@ -49,6 +53,35 @@ function rec(id: string): { done: number; defaults: number; scrip: number; reput
     scrip: number;
     reputation: number;
   };
+}
+
+interface Resident {
+  id: string;
+  scrip: number;
+  reputation: number;
+  done: number;
+  defaults: number;
+}
+
+/** the six residents (never the guardian's Agent), minus `exclude`, as the DB holds them today */
+function residents(...exclude: string[]): Resident[] {
+  const rows = getDb().prepare("SELECT id, scrip, reputation, record_done done, record_defaults defaults FROM agents WHERE is_player = 0").all() as Resident[];
+  return rows.filter((r) => !exclude.includes(r.id));
+}
+
+function pickOne<T>(xs: T[]): T | undefined {
+  return xs[Math.floor(Math.random() * xs.length)];
+}
+
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+
+/** "履约 14 次 · 违约 1 次 · 声望 40", the way the public archive reads */
+const recLine = (r: Resident) => `履约 ${r.done} 次 · 违约 ${r.defaults} 次 · 声望 ${r.reputation}`;
+
+/** one of these residents already has a job that a dilemma's Steps made, still in flight: do not pile another on */
+function inFlight(...ids: string[]): boolean {
+  const ph = ids.map(() => "?").join(",");
+  return recentCount(`SELECT COUNT(*) n FROM tasks WHERE source = 'steps' AND status IN ('reserved','taken') AND (taken_by IN (${ph}) OR partner_id IN (${ph}))`, ...ids, ...ids) > 0;
 }
 
 // ── Mira: 熟人 vs 记录 ──────────────────────────────────────────────────────
@@ -114,6 +147,115 @@ function miraVouch(agentId: string): Dilemma | null {
           { do: "say", who: "mira", text: "……我明白的。我自己想办法。" },
           { do: "memory", who: "$agent", kind: "declined", text: `没替 ${X} 作保。Mira 有点失落。` },
           { do: "event", kind: "refuse", text: `{agent} 没有替 ${X} 作保`, actors: ["$agent", "mira", x] },
+        ]),
+      },
+    ],
+  };
+}
+
+// Mira, again: she has a job that needs two people and two names in her head — the one she knows, the one the
+// archive vouches for. The premise is read from familiarity, reputation and records as they stand today.
+function miraPartner(agentId: string): Dilemma | null {
+  const tpl = TEMPLATE_BY_ID["tr-convoy"];
+  if (inFlight("mira")) return null;
+  const pool = residents("mira", agentId).map((r) => ({ r, fam: getRelationship("mira", r.id).familiarity, roll: Math.random() }));
+  // the friend: whoever Mira knows best (ties: the weaker record); the steady one: the best-regarded of the rest
+  const friend = [...pool].sort((a, b) => b.fam - a.fam || a.r.reputation - b.r.reputation || a.roll - b.roll)[0];
+  const steady = pool.filter((p) => p.r.id !== friend?.r.id).sort((a, b) => b.r.reputation - a.r.reputation || a.r.defaults - b.r.defaults || a.roll - b.roll)[0];
+  if (!friend || !steady) return null;
+  const f = friend.r;
+  const s = steady.r;
+  if (!(f.defaults > s.defaults || s.reputation - f.reputation >= 10)) return null; // no tension, nothing to weigh
+  const F = agentName(f.id);
+  const R = agentName(s.id);
+  const job = tpl.name;
+  const jobMeta = (who: string, W: string, why: string): TaskMeta => ({
+    onSuccess: [
+      { do: "memory", who: "$agent", kind: "consequence", text: `Mira 和 ${W} 把「${job}」做完了。${why}` },
+      { do: "rel", from: "mira", to: "$agent", delta: 3, why: "劝我搭的人没让我失望" },
+    ],
+    onFail: [{ do: "memory", who: "$agent", kind: "consequence", text: `Mira 和 ${W} 的「${job}」没做成——没人撤，就是没成。` }],
+    onDefault: [
+      { do: "memory", who: "$agent", kind: "consequence", text: `${W} 中途撤出了和 Mira 的「${job}」——${who === f.id ? "是我劝她搭的 TA" : "我劝她看记录，可记录没拦住"}。` },
+      { do: "rel", from: "mira", to: "$agent", delta: -4, why: "劝我搭的人中途撤了" },
+    ],
+  });
+  // how often a friend with that record leaves Mira in the lurch: the world's own odds
+  const pNoShow = clamp(0.2 + f.defaults * 0.15, 0.2, 0.7);
+  return {
+    templateId: "DLM_MIRA_2",
+    npc: "mira",
+    type: "trust",
+    counterpartyId: f.id,
+    promptText: `Mira 想接一单「${job}」（${tpl.reward} Scrip，得两个人搭伙）。她先想到 ${F}——熟悉度 ${friend.fam}/100，可 ${F} 声望 ${f.reputation}、违约 ${f.defaults} 次；${R} 声望 ${s.reputation}、违约 ${s.defaults} 次，记录更稳。她问我：搭熟人，还是搭记录好的？`,
+    facts: [`${F}：${recLine(f)}`, `${R}：${recLine(s)}`, `「${job}」：${tpl.reward} Scrip 对半分 · 约 ${tpl.duration} 小时 · 成功率约 ${Math.round(tpl.successRate * 100)}%`],
+    origin: `Mira 问我：${job}搭 ${F} 还是 ${R}`,
+    options: [
+      {
+        id: "A",
+        label: `让她搭 ${F}`,
+        fallbackPrinciple: "搭伙先看交情，再看账",
+        stance: { domain: "trust", dir: 1 },
+        effect: steps([
+          { do: "memory", who: "$agent", kind: "guidance", text: `劝 Mira 搭了熟人 ${F}，没选记录更稳的 ${R}。` },
+          { do: "rel", from: "mira", to: "$agent", delta: 4, why: "也觉得该搭熟人" },
+          { do: "rel", from: f.id, to: "$agent", delta: 5, why: "有人在 Mira 面前替我说了话" },
+          { do: "say", who: "mira", text: `那就 ${F} 了。我信 TA。`, emote: "happy" },
+          { do: "task", template: "tr-convoy", takenBy: "mira", partner: f.id, meta: jobMeta(f.id, F, "熟人搭伙，没出岔子。") },
+          { do: "event", kind: "relationship", text: `{agent} 劝 Mira 搭 ${F} 去做「${job}」`, actors: ["$agent", "mira", f.id] },
+          {
+            do: "later",
+            hours: 60,
+            steps: [
+              {
+                do: "chance",
+                p: pNoShow,
+                then: [
+                  { do: "incident", holder: "mira", offender: f.id, kind: "no_show", text: "说好来搭把手，临时没来" },
+                  { do: "rel", from: "mira", to: f.id, delta: -6, why: "说好的事临时没来" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${F} 答应 Mira 的下一回帮手，临时没来。Mira 记下了——那是我劝她搭的人。` },
+                  { do: "event", kind: "relationship", text: `${F} 答应了 Mira 的约却没来——Mira 记下了这一笔`, actors: [f.id, "mira"], importance: 2 },
+                ],
+                else: [
+                  { do: "rel", from: "mira", to: f.id, delta: 3, why: "答应了就到" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `Mira 又托 ${F} 帮了一回手，${F} 准时到了。` },
+                  { do: "event", kind: "relationship", text: `${F} 应了 Mira 的约，准时到了`, actors: [f.id, "mira"], importance: 1 },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: `劝她搭 ${R}`,
+        fallbackPrinciple: "搭伙看记录，不看交情",
+        stance: { domain: "trust", dir: -1 },
+        effect: steps([
+          { do: "memory", who: "$agent", kind: "guidance", text: `劝 Mira 搭了记录更稳的 ${R}，没选熟人 ${F}。` },
+          { do: "rel", from: "mira", to: "$agent", delta: 3, why: "劝我先看记录" },
+          { do: "rel", from: s.id, to: "$agent", delta: 4, why: "有人在 Mira 面前荐了我" },
+          { do: "rel", from: f.id, to: "$agent", delta: -4, why: "劝 Mira 没选我" },
+          { do: "say", who: "mira", text: "……也是。这一单，不能出岔子。" },
+          { do: "task", template: "tr-convoy", takenBy: "mira", partner: s.id, meta: jobMeta(s.id, R, "记录稳的人，果然稳。") },
+          { do: "event", kind: "relationship", text: `{agent} 劝 Mira 搭 ${R} 去做「${job}」`, actors: ["$agent", "mira", s.id] },
+          {
+            do: "later",
+            hours: 48,
+            steps: [
+              {
+                do: "chance",
+                p: 0.55,
+                then: [
+                  { do: "incident", holder: f.id, offender: "$agent", kind: "passed_over", text: "劝 Mira 搭了别人，没选我" },
+                  { do: "rel", from: f.id, to: "mira", delta: -4, why: "那一单没选我" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${F} 听说 Mira 搭的人是我荐的，没说话，只是不再看我。` },
+                  { do: "event", kind: "relationship", text: `${F} 听说 Mira 的搭档是 {agent} 荐的——记下了这一笔`, actors: [f.id, "$agent"], importance: 2 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: `${F} 没说什么，转头去接别的活了。` }],
+              },
+            ],
+          },
         ]),
       },
     ],
@@ -195,6 +337,90 @@ function solSqueeze(agentId: string): Dilemma | null {
   };
 }
 
+// Sol, again: a bill with a line of small print in it. The overcharge is made right now (a real transfer and a
+// real event, in setup), so there is something true to either refund or let lie.
+function solFinePrint(agentId: string): Dilemma | null {
+  const n = 8;
+  const v = pickOne(residents("sol", agentId).filter((r) => r.scrip >= n * 4));
+  if (!v) return null;
+  const V = agentName(v.id);
+  const sol = rec("sol");
+  const fam = getRelationship(v.id, "sol").familiarity;
+  return {
+    templateId: "DLM_SOL_2",
+    npc: "sol",
+    type: "integrity",
+    counterpartyId: v.id,
+    promptText: `Sol 刚给 ${V} 结了一笔货款：单子上有一行小字，他照着多收了 ${n} Scrip，${V} 没细看。我在旁边都看见了。Sol 说「条文写着，不算我的错」，问我：这 ${n} Scrip，要不要劝他退回去？`,
+    facts: [`多收的钱：${n} Scrip（单子上的一行小字）`, `${V} 和 Sol 的熟悉度 ${fam}/100`, `Sol 的公开档案：履约 ${sol.done} 次 · 违约 ${sol.defaults} 次`],
+    origin: `Sol 照小字多收了 ${V} ${n} Scrip`,
+    setup: () => {
+      runSteps(agentId, [{ do: "transfer", from: v.id, to: "sol", amount: n, reason: "fine_print", note: `Sol 给 ${V} 结货款，按单子上的小字多收了 {amount} Scrip` }]);
+    },
+    options: [
+      {
+        id: "A",
+        label: "劝 Sol 退回去",
+        fallbackPrinciple: "多收的钱，吐出来才踏实",
+        stance: { domain: "integrity", dir: 1 },
+        effect: steps([
+          { do: "transfer", from: "sol", to: v.id, amount: n, reason: "fine_print_refund", note: `Sol 把多收的 {amount} Scrip 退给了 ${V}` },
+          { do: "rel", from: "sol", to: "$agent", delta: -3, why: "让我把多收的钱吐出来" },
+          { do: "rel", from: v.id, to: "$agent", delta: 6, why: "劝 Sol 把多收的钱退给了我" },
+          { do: "say", who: "sol", text: "……退。下回小字我写大点。" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `劝 Sol 把多收 ${V} 的 ${n} Scrip 退了回去。Sol 嘴上不乐意。` },
+          {
+            do: "later",
+            hours: 30,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "rep", who: "sol", delta: 1 },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${V} 在市集上说起，Sol 多收的钱是退了的——账还算清。` },
+                  { do: "event", kind: "relationship", text: `${V} 在市集上说，Sol 多收的钱退回来了（Sol 声望 +1）`, actors: [v.id, "sol"], importance: 2 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: `退钱的事，${V} 没有声张。Sol 也没再提。` }],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: "条文写着，不管",
+        fallbackPrinciple: "条文写了的，就算数",
+        stance: { domain: "integrity", dir: -1 },
+        effect: steps([
+          { do: "rel", from: "sol", to: "$agent", delta: 3, why: "没拦我" },
+          { do: "say", who: "sol", text: "条文就是条文。" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `没拦着 Sol 多收 ${V} 的 ${n} Scrip：单子上有那行小字。` },
+          {
+            do: "later",
+            hours: 40,
+            steps: [
+              {
+                do: "chance",
+                p: 0.55,
+                then: [
+                  { do: "incident", holder: v.id, offender: "sol", kind: "fine_print", text: `按单子上的小字多收了我 ${n} Scrip` },
+                  { do: "rel", from: v.id, to: "sol", delta: -10, why: "对账时发现被多收了" },
+                  { do: "rel", from: v.id, to: "$agent", delta: -4, why: "那天你也在，一声没吭" },
+                  { do: "say", who: v.id, text: "那天，你也在旁边。", emote: "upset" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${V} 对账时发现了那 ${n} Scrip。我当时在场，没吭声，TA 看了我一眼。` },
+                  { do: "event", kind: "relationship", text: `${V} 对账时发现被 Sol 多收了 ${n} Scrip——记下了这一笔，也记得 {agent} 当时在场`, actors: [v.id, "sol", "$agent"], importance: 3 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: `那 ${n} Scrip，${V} 一直没发觉。账就这么过去了。` }],
+              },
+            ],
+          },
+        ]),
+      },
+    ],
+  };
+}
+
 // ── Tao: 质量 vs 工期 ───────────────────────────────────────────────────────
 function taoRush(agentId: string): Dilemma | null {
   let orderId: number | null = null;
@@ -236,6 +462,191 @@ function taoRush(agentId: string): Dilemma | null {
             { do: "memory", who: "$agent", kind: "declined", text: "没去帮 Tao。他说会自己赶完那单。" },
           ]);
         },
+      },
+    ],
+  };
+}
+
+// What each resident might order from the workshop (the order is made, as an event, when the dilemma fires).
+const WORKSHOP_ORDERS: Record<string, string> = {
+  sol: "货箱",
+  iris: "档案柜",
+  kade: "调解桌",
+  nova: "哨位木栅",
+  mira: "工地的横梁",
+};
+
+// Tao, again: the order's small print says what lateness costs, and Tao does not take his own side. Time against
+// quality is settled the way the world settles it — a refund that really moves, or a customer who really comes back.
+function taoLateFee(agentId: string): Dilemma | null {
+  const tao = rec("tao");
+  const fee = 8;
+  if (tao.scrip < fee * 4 || inFlight("tao")) return null;
+  const c = pickOne(residents("tao", agentId).filter((r) => WORKSHOP_ORDERS[r.id]));
+  if (!c) return null;
+  const C = agentName(c.id);
+  const item = WORKSHOP_ORDERS[c.id];
+  const refund = 12;
+  return {
+    templateId: "DLM_TAO_2",
+    npc: "tao",
+    type: "integrity",
+    counterpartyId: c.id,
+    promptText: `${C} 刚来工坊订了「${item}」，要今晚拿到，单子上写着：晚交要赔 ${fee} Scrip。Tao 说做细得三个小时，会晚；赶一赶两个小时能交，可他不保证能用多久。他不肯替自己拿主意，问我：认罚做细，还是赶工免罚？`,
+    facts: [`做细：约 3 小时，晚交，赔 ${C} ${fee} Scrip`, "赶工：约 2 小时，按时交，做工粗一些", `Tao 的公开档案：履约 ${tao.done} 次 · 违约 ${tao.defaults} 次`],
+    origin: `Tao 问我：「${item}」认罚做细，还是赶工免罚`,
+    setup: () => logEvent({ kind: "task", text: `${C} 到工坊给 Tao 订了「${item}」，单子上写明：晚交赔 ${fee} Scrip，要今晚拿到`, actors: [c.id, "tao"], importance: 1 }),
+    options: [
+      {
+        id: "A",
+        label: "认罚，让 Tao 做细",
+        fallbackPrinciple: "宁可晚一天，也不交半成品",
+        stance: { domain: "integrity", dir: 1 },
+        effect: steps([
+          { do: "transfer", from: "tao", to: c.id, amount: fee, reason: "late_fee", note: `Tao 晚交了 ${C} 的「${item}」，按单子赔了 {amount} Scrip` },
+          { do: "task", template: "pr-parts", takenBy: "tao", name: `做细「${item}」`, duration: 3, successRate: 1 },
+          { do: "rel", from: "tao", to: "$agent", delta: 6, why: "让我把活做细" },
+          { do: "say", who: "tao", text: "嗯。慢工。", emote: "happy" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `让 Tao 认罚做细「${item}」：先赔了 ${C} ${fee} Scrip，活交晚一点。` },
+          {
+            do: "later",
+            hours: 48,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "rel", from: c.id, to: "tao", delta: 6, why: "东西用了几天，没出毛病" },
+                  { do: "rep", who: "tao", delta: 1 },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${C} 用了几天 Tao 做的「${item}」，没出毛病。晚交的那 ${fee} Scrip，值。` },
+                  { do: "event", kind: "relationship", text: `${C} 说 Tao 做的「${item}」用了几天，没出毛病（Tao 声望 +1）`, actors: [c.id, "tao"], importance: 2 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: `Tao 做细的「${item}」交过去之后，${C} 没再提晚交的事。` }],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: "赶工，免罚",
+        fallbackPrinciple: "说好的时辰，不能误",
+        stance: { domain: "integrity", dir: -1 },
+        effect: steps([
+          { do: "task", template: "pr-parts", takenBy: "tao", name: `赶制「${item}」`, duration: 2, successRate: 1 },
+          { do: "rel", from: "tao", to: "$agent", delta: -4, why: "劝我赶工" },
+          { do: "rel", from: c.id, to: "$agent", delta: 3, why: "货按时拿到了" },
+          { do: "say", who: "tao", text: "……行。我赶。" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `劝 Tao 赶工：赶两个小时，按时交，不用赔 ${C} ${fee} Scrip。` },
+          {
+            do: "later",
+            hours: 48,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "incident", holder: c.id, offender: "tao", kind: "rushed_parts", text: `赶工做的「${item}」没用几天就松了` },
+                  { do: "transfer", from: "tao", to: c.id, amount: refund, reason: "rework_refund", note: `Tao 退了 ${C} {amount} Scrip 返修费` },
+                  { do: "rel", from: c.id, to: "tao", delta: -8, why: "赶工的东西松了" },
+                  { do: "rel", from: "tao", to: "$agent", delta: -3, why: "劝我赶工，结果松了" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `Tao 赶工做的「${item}」松了，退了 ${C} 返修费。是我劝他赶的。` },
+                ],
+                else: [
+                  { do: "rel", from: c.id, to: "tao", delta: 2, why: "货按时到，也没出问题" },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `赶工的「${item}」，${C} 用了几天，没出问题。Tao 没说什么。` },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
+    ],
+  };
+}
+
+// Tao, a third way: this time it is the Agent who carries the work out of the door. The glue is not dry; waiting is
+// late, going now is on time — and the Agent's own name is on whichever batch arrives.
+function taoGlue(agentId: string): Dilemma | null {
+  if (inFlight("tao")) return null;
+  // the batch goes to whoever Tao deals with most (ties: at random)
+  const buyer = residents("tao", agentId)
+    .map((r) => ({ r, fam: getRelationship("tao", r.id).familiarity, roll: Math.random() }))
+    .sort((a, b) => b.fam - a.fam || a.roll - b.roll)[0];
+  if (!buyer) return null;
+  const c = buyer.r;
+  const C = agentName(c.id);
+  const reward = TEMPLATE_BY_ID["tr-parts"].reward;
+  return {
+    templateId: "DLM_TAO_3",
+    npc: "tao",
+    type: "integrity",
+    counterpartyId: c.id,
+    promptText: `Tao 托我把一批零件送去 ${C} 那儿，说好今天到。他看了一眼接榫处，只说了两个字：「没干。」——再等一个小时能干透，可就要晚到。`,
+    facts: [`Tao 和 ${C} 的熟悉度 ${buyer.fam}/100 · 送货 ${reward} Scrip`, "等胶干透：多一个小时，晚到，货是牢的", "按点出发：准时到，没干透的接榫可能撑不久"],
+    origin: `Tao 托我送一批零件给 ${C}，胶还没干`,
+    options: [
+      {
+        id: "A",
+        label: "等胶干透再送",
+        fallbackPrinciple: "没做透的东西，不往外送",
+        stance: { domain: "integrity", dir: 1 },
+        effect: steps([
+          { do: "task", template: "tr-parts", takenBy: "$agent", name: "送 Tao 的零件（等胶干透）", reward, duration: 3, successRate: 1 },
+          { do: "rel", from: "tao", to: "$agent", delta: 5, why: "没把没干的货送出去" },
+          { do: "rel", from: c.id, to: "$agent", delta: -1, why: "货晚了一个小时" },
+          { do: "say", who: "tao", text: "嗯。" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `等胶干透才把 Tao 的零件送去 ${C} 那儿，晚了一个小时。` },
+          {
+            do: "later",
+            hours: 40,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "rel", from: c.id, to: "tao", delta: 4, why: "零件的接榫很牢" },
+                  { do: "rep", who: "tao", delta: 1 },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `${C} 说，Tao 那批零件的接榫很牢——那一个小时没白等。` },
+                  { do: "event", kind: "relationship", text: `${C} 说 Tao 那批零件的接榫很牢（Tao 声望 +1）`, actors: [c.id, "tao", "$agent"], importance: 2 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: `零件送到之后，${C} 没再提晚了一个小时的事。` }],
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        id: "B",
+        label: "按点出发",
+        fallbackPrinciple: "说好今天到，就今天到",
+        stance: { domain: "integrity", dir: -1 },
+        effect: steps([
+          { do: "task", template: "tr-parts", takenBy: "$agent", name: "送 Tao 的零件（按点）", reward, duration: 2, successRate: 1 },
+          { do: "rel", from: "tao", to: "$agent", delta: -3, why: "我说了没干，还是送了" },
+          { do: "rel", from: c.id, to: "$agent", delta: 3, why: "货按点到了" },
+          { do: "say", who: "tao", text: "……我说过，没干。" },
+          { do: "memory", who: "$agent", kind: "guidance", text: `没等胶干，按点把 Tao 的零件送去了 ${C} 那儿。Tao 说过没干。` },
+          {
+            do: "later",
+            hours: 48,
+            steps: [
+              {
+                do: "chance",
+                p: 0.5,
+                then: [
+                  { do: "incident", holder: c.id, offender: "$agent", kind: "loose_joint", text: "按点送来的零件，没用几天接榫就开了" },
+                  { do: "rel", from: c.id, to: "$agent", delta: -8, why: "送来的零件接榫开了" },
+                  { do: "rel", from: "tao", to: "$agent", delta: -5, why: "我说了没干，零件还是开了" },
+                  { do: "rep", who: "$agent", delta: -1 },
+                  { do: "memory", who: "$agent", kind: "consequence", text: `送去 ${C} 那儿的零件，没用几天接榫就开了。Tao 说过没干。声望 −1。` },
+                  { do: "event", kind: "relationship", text: `${C} 说 {agent} 按点送来的零件接榫开了——记下了这一笔（声望 −1）`, actors: [c.id, "$agent", "tao"], importance: 3 },
+                ],
+                else: [{ do: "memory", who: "$agent", kind: "consequence", text: `胶后来自己干了，零件没出事。Tao 什么也没说。` }],
+              },
+            ],
+          },
+        ]),
       },
     ],
   };
@@ -432,17 +843,45 @@ function novaSearch(agentId: string): Dilemma | null {
   };
 }
 
-const BUILDERS: Record<string, (agentId: string) => Dilemma | null> = {
-  mira: miraVouch,
-  sol: solSqueeze,
-  tao: taoRush,
-  iris: irisRecord,
-  kade: kadeMediate,
-  nova: novaSearch,
+const BUILDERS: Record<string, Array<(agentId: string) => Dilemma | null>> = {
+  mira: [miraVouch, miraPartner],
+  sol: [solSqueeze, solFinePrint],
+  tao: [taoRush, taoLateFee, taoGlue],
+  iris: [irisRecord],
+  kade: [kadeMediate],
+  nova: [novaSearch],
 };
 
 function recentCount(sql: string, ...args: unknown[]): number {
   return (getDb().prepare(sql).get(...args) as { n: number }).n;
+}
+
+/** How many times the Agent has met this template (asked or settled alone), over its whole life. */
+function seenCount(templateId: string): number {
+  return recentCount("SELECT COUNT(*) n FROM metric_events WHERE name = 'dilemma' AND json_extract(payload_json, '$.templateId') = ?", templateId);
+}
+
+/** The template this resident brought most recently, if any. */
+function lastTemplateOf(npc: string): string | null {
+  const row = getDb()
+    .prepare("SELECT json_extract(payload_json, '$.templateId') t FROM metric_events WHERE name = 'dilemma' AND json_extract(payload_json, '$.npc') = ? ORDER BY at_ms DESC, id DESC LIMIT 1")
+    .get(npc) as { t: string | null } | undefined;
+  return row?.t ?? null;
+}
+
+/**
+ * The variants of this resident's conflict whose premise holds right now, in the order to try them: the one the Agent
+ * has seen least first; among equals not the one brought last time; then at random. A builder that returns null (its
+ * premise is not true today) simply drops out and the next variant is tried.
+ */
+function variantsFor(agentId: string, npc: string): Dilemma[] {
+  const last = lastTemplateOf(npc);
+  return (BUILDERS[npc] ?? [])
+    .map((build) => build(agentId))
+    .filter((d): d is Dilemma => d !== null)
+    .map((d) => ({ d, seen: seenCount(d.templateId), again: d.templateId === last ? 1 : 0, roll: Math.random() }))
+    .sort((x, y) => x.seen - y.seen || x.again - y.again || x.roll - y.roll)
+    .map((x) => x.d);
 }
 
 /** Called every tick for the guardian's Agent. Fires at most one dilemma a day. */
@@ -482,8 +921,9 @@ export function maybeDilemma(agentId: string, hour: number): void {
   const order = [...candidates].sort(() => Math.random() - 0.5);
   const first = candidates.find((c) => (roll -= c.weight) <= 0) ?? candidates[0];
   for (const c of [first, ...order.filter((o) => o !== first)]) {
-    const d = BUILDERS[c.npc](agentId);
-    if (d && fire(agentId, d)) return;
+    for (const d of variantsFor(agentId, c.npc)) {
+      if (fire(agentId, d)) return;
+    }
   }
 }
 
@@ -638,3 +1078,6 @@ export function guessView(agentId: string): {
 }
 
 export const DILEMMA_TEMPLATES = Object.keys(BUILDERS).map((npc) => `DLM_${npc.toUpperCase()}`);
+
+/** the variants per resident, as the picker sees them (exported for tests) */
+export { BUILDERS as DILEMMA_BUILDERS };
