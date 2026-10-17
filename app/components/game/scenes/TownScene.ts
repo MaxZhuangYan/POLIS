@@ -21,9 +21,12 @@ import {
   type TownModel
 } from "@/app/components/town/tiled";
 import { PathFinder, type TilePoint } from "@/app/components/town/pathfinding";
-import { animKey, frameIndex, spriteTexture, type Direction } from "@/app/components/town/characters";
+import { WALK_FPS, animKey, frameIndex, spriteTexture, type Direction } from "@/app/components/town/characters";
 import { EventBus } from "../EventBus";
 import { BG_COLOR, DEPTH, KEYS, MAP_ABOVE_LAYER, MAP_LAYERS, PIXEL_FONT, SCENES, emoteTexture, tilesetTextureKey } from "../keys";
+import { planStands, type StandSpot } from "../standPlan";
+import { layoutLabels, type LabelBox } from "../labelLayout";
+import { CUE_KINDS, cuesForFeedItem, thinCues, type Cue, type CueIcon, type CueTone } from "../feedCues";
 
 // ───────────────────────────── public surface ─────────────────────────────
 
@@ -49,10 +52,19 @@ const DEFAULT_ZOOM_PHONE = 2;
 const CHAR_H = 16; // a character is one tile
 const BUBBLE_MS = 7000;
 const BUBBLE_FADE_MS = 700;
-const CATCHUP_MAX_S = 2.4;
-const CATCHUP_SPEED = 80; // px / s
+const CATCH_SPEED_MIN = 36; // px / s: walking back to a tile that changed (a partner arrived, a fast-forward moved the town on)
+const CATCH_SPEED_MAX = 150;
+const CATCH_SECONDS = 2.2; // a long way is covered in about this time (within the speed limits)
+const TRIP_SPEED_MIN = 20; // px / s: a trip is walked at least this fast, so a short trip ends early and the resident waits at the door
+const TRIP_SPEED_MAX = 100; // px / s: never faster than this when the clock jumps ahead
 const WANDER_SPEED = 15; // px / s
+const STRIDE_PX = 3; // ground covered per animation frame, so feet and ground move together
 const GOLD = 0xf2c75c;
+const CUE_MS = 2600; // a floating result lives this long
+const CUE_STAGGER_MS = 300; // consecutive cues of one burst start this far apart
+const CUE_MAX_PER_RESIDENT = 3;
+const CUE_BURST_LIMIT = 8; // a fast-forward can bring dozens of feed items at once: at most this many cues per snapshot
+const CUE_STALE_MS = 5000; // a queued cue older than this (the tab was hidden) is dropped, not replayed
 
 // ───────────────────────────── helpers ─────────────────────────────
 
@@ -78,6 +90,32 @@ function mulberry32(seed: number): () => number {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+/** move `v` towards `target` by at most `step`, never past it */
+const approach = (v: number, target: number, step: number) => (target > v ? Math.min(target, v + step) : Math.max(target, v - step));
+
+/** the guardian's name plate rides this many screen px above the head (its pointer fills the gap) */
+const PLATE_LIFT = 3;
+
+/** result-chip icons: pixel art, 2 px per pixel. X = the tone colour, O ink, G gold, H highlight, D dark gold */
+const CUE_ICONS: Record<Exclude<CueIcon, "none">, string[]> = {
+  coin: ["..OOO..", ".OHHGO.", "OHGGGDO", "OHGDGDO", "OGGGGDO", ".ODDDO.", "..OOO.."],
+  check: [".....XX", "....XX.", "X..XX..", "XXXX...", ".XX....", "..X...."],
+  cross: ["XX...XX", "XXX.XXX", ".XXXXX.", "..XXX..", ".XXXXX.", "XXX.XXX", "XX...XX"],
+  heart: [".XX.XX.", "XXXXXXX", "XXXXXXX", ".XXXXX.", "..XXX..", "...X..."],
+  crack: [".XX.XX.", "XXX.XXX", "XXXX.XX", ".XX.XX.", "..XX.X.", "...X..."],
+  star: ["...X...", "...X...", "XXXXXXX", ".XXXXX.", "..XXX..", ".XX.XX.", ".X...X."],
+  alert: ["..XXX..", "..XXX..", "..XXX..", "...X...", ".......", "..XXX..", "..XXX.."],
+  link: [".XXX.XXX.", "X...X...X", "X...X...X", ".XXX.XXX."]
+};
+const CUE_TONES: Record<CueTone, { css: string; edge: number }> = {
+  gold: { css: "#ffd86a", edge: 0xf2c75c },
+  green: { css: "#a8ec8f", edge: 0x7cc86a },
+  red: { css: "#ff8e7e", edge: 0xe0584a },
+  teal: { css: "#8fe3ff", edge: 0x58b8d8 },
+  orange: { css: "#ffb55e", edge: 0xe08a30 },
+  pink: { css: "#ff9ec7", edge: 0xe0709e },
+  blue: { css: "#9bbcff", edge: 0x6f93e0 }
+};
 
 function lerpColor(a: number, b: number, t: number): number {
   const ar = (a >> 16) & 255;
@@ -226,12 +264,25 @@ function gradeAt(hour: number): Grade {
 interface BubbleView {
   box: Phaser.GameObjects.Container;
   shownAt: number; // performance.now()
+  w: number;
+  h: number;
 }
 
-interface CatchUp {
+/** a floating result above a resident's head (a feed item turned into a short chip) */
+interface CueView {
+  box: Phaser.GameObjects.Container;
+  born: number; // performance.now()
+  key: string; // icon + text, to merge repeats
+  y: number; // current offset (px above the stack), eased towards its slot
+}
+
+/** the line a resident is walking: a server-announced trip or a catch-up to a tile that changed */
+interface Route {
   walk: Walk;
-  dur: number;
-  t: number;
+  d: number;
+  kind: "travel" | "catch";
+  /** catch-up speed, px / s */
+  speed: number;
 }
 
 interface Wander {
@@ -248,37 +299,40 @@ interface Resident {
   ring: Phaser.GameObjects.Image | null;
   sel: Phaser.GameObjects.Image;
   sprite: Phaser.GameObjects.Sprite;
+  ghost: Phaser.GameObjects.Sprite; // a see-through copy drawn over roofs and canopies while the resident is behind one
+  light: Phaser.GameObjects.Image; // a soft lamp glow around the resident at night
   texture: string;
-  top: Phaser.GameObjects.Container; // label + emote + bubble (kept above all sprites)
+  top: Phaser.GameObjects.Container; // label + emote + bubble + cues (kept above all sprites)
   label: Phaser.GameObjects.Text;
+  plate: Phaser.GameObjects.Graphics | null; // the guardian's Agent wears its name on a gold-edged plate
   emoteBg: Phaser.GameObjects.Image;
   emoteIcon: Phaser.GameObjects.Image;
   emoteKey: string | null;
   bubble: BubbleView | null;
   bubbleSeenAt: number | null;
+  cues: CueView[];
   // motion
   x: number; // feet, world px
   y: number;
   dir: Direction;
   walking: boolean;
   speedEma: number;
-  fresh: boolean; // first frame: snap to target
-  locShown: LocationId | null;
-  travelKey: string | null;
-  travelWalk: Walk | null;
-  catchUp: CatchUp | null;
-  slotLoc: LocationId | null;
-  slotIdx: number;
+  fresh: boolean; // first frame: snap to the planned place
+  planLoc: LocationId; // where it is, or where its trip leads
+  stand: StandSpot | null; // the tile it stands on there (never shared)
+  standLoc: LocationId | null;
+  travelKey: string | null; // the trip a route was built for
+  route: Route | null;
+  vis: number; // 0 = inside the house (asleep), 1 = on the street
+  phase: number;
   // wander
   rng: () => number;
-  wx: number;
-  wy: number;
   wander: Wander | null;
   wUntil: number;
-  wBase: Pt | null;
-  breathe: number;
-  lift: number; // label lift (px) to avoid name tags colliding
-  liftCur: number;
+  // labels
+  labelLevel: number; // lift steps of the name tag (hysteresis for the layout)
+  labelLift: number; // current lift, screen px
+  labelAlpha: number;
 }
 
 interface Dog {
@@ -313,8 +367,18 @@ export class TownScene extends Phaser.Scene implements TownApi {
   private nightOverlay!: Phaser.GameObjects.Rectangle;
   private hoverGfx!: Phaser.GameObjects.Graphics;
   private hoverTip!: Phaser.GameObjects.Text;
+  private pairGfx!: Phaser.GameObjects.Graphics; // the ring under two residents who are working together
   private hovered: Interactable | null = null;
-  private placeLabels: { id: LocationId; text: Phaser.GameObjects.Text; ax: number; ay: number }[] = [];
+  private placeLabels: { id: LocationId; box: Phaser.GameObjects.Container; w: number; h: number; ax: number; ay: number; alpha: number }[] = [];
+  private hoverResId: string | null = null;
+  // night lights: doors, lamps (static) and a glow around every resident (see updateLights)
+  private nightLights: { img: Phaser.GameObjects.Image; kind: "door" | "lamp"; base: number; homeSlot: number }[] = [];
+  private lightK = 0; // 0 = day … 1 = full night: how much the lamps give
+  // results on the map: feed items that arrived since the last snapshot become short chips above their actors
+  private feedSeen: Set<number> | null = null;
+  private feedMaxId = 0;
+  private cueQueue: { actor: string; cue: Cue; at: number }[] = [];
+  private faceCache = new Map<number, Direction | "none">();
   private grade: Grade | null = null;
   private lastGradeKey = "";
   private selectedId: string | null = null;
@@ -427,11 +491,13 @@ export class TownScene extends Phaser.Scene implements TownApi {
     this.buildMap(raw);
     this.makeTextures();
     this.buildOverlays();
+    this.buildLights(raw);
     this.buildDog();
 
     this.uiLayer = this.add.container(0, 0).setDepth(DEPTH.ui);
     this.buildPlaceLabels();
     this.hoverGfx = this.add.graphics().setDepth(DEPTH.hover);
+    this.pairGfx = this.add.graphics().setDepth(DEPTH.residents - 1);
     this.hoverTip = this.add
       .text(0, 0, "", { fontFamily: FONT, fontSize: "12px", color: "#ffe08a", stroke: INK, strokeThickness: 3 })
       .setOrigin(0.5, 1)
@@ -572,20 +638,42 @@ export class TownScene extends Phaser.Scene implements TownApi {
       c.fill();
       c.restore();
     });
-    mk("ring-gold", 84, 40, (c) => {
-      c.shadowColor = "rgba(242,199,92,0.95)";
-      c.shadowBlur = 8;
-      c.strokeStyle = "#f2c75c";
-      c.lineWidth = 3;
-      c.beginPath();
-      c.ellipse(42, 20, 33, 13, 0, 0, Math.PI * 2);
-      c.stroke();
-      c.shadowBlur = 0;
-      c.strokeStyle = "rgba(255,244,200,0.9)";
-      c.lineWidth = 1;
-      c.beginPath();
-      c.ellipse(42, 20, 33, 13, 0, 0, Math.PI * 2);
-      c.stroke();
+    // The guardian's Agent stands on a pixel ring, drawn 1:1 in world pixels (so it is 2-4 screen px thick at the
+    // game's zoom): a gold band with a dark outline on both edges, readable on sand, grass, stone and at night.
+    mk(
+      "ring-gold",
+      36,
+      18,
+      (c) => {
+        const cx = 18;
+        const cy = 9;
+        const rx = 15.5;
+        const ry = 6.5;
+        for (let py = 0; py < 18; py++) {
+          for (let px = 0; px < 36; px++) {
+            const v = ((px + 0.5 - cx) / rx) ** 2 + ((py + 0.5 - cy) / ry) ** 2;
+            let col: string | null = null;
+            if (v >= 0.66 && v < 0.84) col = "#fff0b0"; // inner highlight
+            else if (v >= 0.84 && v < 1.0) col = "#f2c75c"; // the gold band
+            else if (v >= 1.0 && v < 1.22) col = "rgba(43,24,13,0.85)"; // outer outline
+            else if (v >= 0.5 && v < 0.66) col = "rgba(43,24,13,0.45)"; // inner outline
+            if (!col) continue;
+            c.fillStyle = col;
+            c.fillRect(px, py, 1, 1);
+          }
+        }
+      },
+      true
+    );
+    // soft light pools for the night (added on top of the night grade; see updateLights)
+    mk("light-soft", 128, 128, (c) => {
+      const g = c.createRadialGradient(64, 64, 0, 64, 64, 64);
+      g.addColorStop(0, "rgba(255,236,190,0.95)");
+      g.addColorStop(0.25, "rgba(255,206,130,0.6)");
+      g.addColorStop(0.6, "rgba(255,170,80,0.2)");
+      g.addColorStop(1, "rgba(255,150,60,0)");
+      c.fillStyle = g;
+      c.fillRect(0, 0, 128, 128);
     });
     mk("ring-sel", 84, 40, (c) => {
       c.shadowColor = "rgba(160,220,255,0.9)";
@@ -722,34 +810,50 @@ export class TownScene extends Phaser.Scene implements TownApi {
 
   // ───────────── place labels / hover ─────────────
 
+  /** a 1-px stepped-corner rectangle (the pixel-art plate shape used by plaques, name plates and result chips) */
+  private steppedRect(g: Phaser.GameObjects.Graphics, x: number, y: number, w: number, h: number): void {
+    g.fillRect(x + 1, y, w - 2, h);
+    g.fillRect(x, y + 1, w, h - 2);
+  }
+
   private buildPlaceLabels(): void {
-    // one small plaque per location, above its biggest building / landmark (houses get theirs on hover only)
+    // One small plaque per place, above its biggest building / landmark; the residential district gets one over its
+    // first row of houses (each house shows its own on hover). A plaque is a dark plate with cream text, so it never
+    // reads like a resident's name (plain outlined text).
+    const make = (id: LocationId, label: string, ax: number, ay: number) => {
+      const text = this.add.text(0, 0, label, { fontFamily: FONT, fontSize: "12px", color: "#fff3d0" }).setOrigin(0.5, 0.5).setResolution(this.labelRes);
+      const w = Math.ceil(text.width) + 12;
+      const h = Math.ceil(text.height) + 3;
+      const g = this.add.graphics();
+      g.fillStyle(0x2b180d, 0.5);
+      this.steppedRect(g, -w / 2, -h + 1, w, h); // a 1 px drop shadow
+      g.fillStyle(0xd9b36a, 0.95);
+      this.steppedRect(g, -w / 2, -h, w, h);
+      g.fillStyle(0x3a2412, 0.92);
+      this.steppedRect(g, -w / 2 + 1, -h + 1, w - 2, h - 2);
+      text.setPosition(0, Math.round(-h / 2));
+      const box = this.add.container(0, 0, [g, text]);
+      this.uiLayer.add(box);
+      this.placeLabels.push({ id, box, w, h, ax, ay, alpha: 1 });
+    };
     for (const id of Object.keys(this.model.locations) as LocationId[]) {
-      if (id === "home") continue;
+      const loc = this.model.locations[id];
+      if (id === "home") {
+        const top = loc.areas.reduce((m, r) => Math.min(m, r.y), Infinity);
+        const left = loc.areas.reduce((m, r) => Math.min(m, r.x), Infinity);
+        const right = loc.areas.reduce((m, r) => Math.max(m, r.x + r.w), -Infinity);
+        if (Number.isFinite(top)) make(id, loc.label, ((left + right) / 2) * 16, top * 16 + 6);
+        continue;
+      }
       const its = this.model.interactables.filter((i) => i.location === id);
       if (its.length === 0) continue;
       const big = its.reduce((a, b) => (b.rect.w * b.rect.h > a.rect.w * a.rect.h ? b : a));
-      const text = this.add
-        .text(0, 0, this.model.locations[id].label, { fontFamily: FONT, fontSize: "12px", color: "#fff3d0", stroke: INK, strokeThickness: 3 })
-        .setOrigin(0.5, 1)
-        .setResolution(this.labelRes)
-        .setShadow(0, 1, INK, 0, true, true)
-        .setAlpha(0.92);
-      this.uiLayer.add(text);
-      this.placeLabels.push({ id, text, ax: big.rect.x + big.rect.w / 2, ay: big.rect.y + 2 });
+      make(id, loc.label, big.rect.x + big.rect.w / 2, big.rect.y + 2);
     }
   }
 
-  private updatePlaceLabels(): void {
+  private updateHover(): void {
     const zoom = this.cameras.main.zoom;
-    const s = clamp(1 / zoom, 0.18, 1.2);
-    const show = zoom <= 3.4;
-    for (const l of this.placeLabels) {
-      l.text.setVisible(show && this.hovered?.location !== l.id);
-      l.text.setScale(s);
-      l.text.setPosition(Math.round(l.ax), Math.round(l.ay - 2 / zoom));
-    }
-    // hover plaque + highlight
     const h = this.hovered;
     this.hoverGfx.clear();
     if (!h) {
@@ -796,11 +900,15 @@ export class TownScene extends Phaser.Scene implements TownApi {
       if (!seen.has(id)) {
         res.root.destroy();
         res.top.destroy();
+        res.ghost.destroy();
+        res.light.destroy();
         this.residents.delete(id);
         if (this.selectedId === id) this.selectedId = null;
         if (this.followId === id) this.followId = null;
       }
     }
+    this.planAllStands();
+    this.ingestFeed();
     if (!this.didInitialCenter && agents.length > 0) {
       const me = agents.find((a) => a.isPlayer);
       if (me) {
@@ -823,12 +931,22 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const texture = spriteTexture(a.sprite);
     const root = this.add.container(0, 0);
     const shadow = this.add.image(0, -1, "shadow").setOrigin(0.5, 0.5).setScale(0.26, 0.26).setAlpha(0.9);
-    const ring = isMe ? this.add.image(0, 0, "ring-gold").setOrigin(0.5, 0.5).setScale(0.3) : null;
+    const ring = isMe ? this.add.image(0, 1, "ring-gold").setOrigin(0.5, 0.5) : null;
     const sel = this.add.image(0, 0, "ring-sel").setOrigin(0.5, 0.5).setScale(0.3).setVisible(false);
     const sprite = this.add.sprite(0, 0, texture, frameIndex("down")).setOrigin(0.5, 1);
     root.add([shadow]);
     if (ring) root.add(ring);
     root.add([sel, sprite]);
+    // behind a roof or a canopy the resident is only a see-through copy of itself, drawn above the roof layer
+    const ghost = this.add.sprite(0, 0, texture, frameIndex("down")).setOrigin(0.5, 1).setDepth(DEPTH.above + 1).setVisible(false);
+    ghost.setTintFill(isMe ? 0xffe27a : 0xfff3d6);
+    const light = this.add
+      .image(0, 0, "light-soft")
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(DEPTH.grade + 3)
+      .setScale(isMe ? 0.7 : 0.46)
+      .setTint(isMe ? 0xffd27a : 0xffe2b0)
+      .setVisible(false);
 
     const top = this.add.container(0, 0);
     const label = this.add
@@ -842,13 +960,14 @@ export class TownScene extends Phaser.Scene implements TownApi {
       .setOrigin(0.5, 1)
       .setResolution(this.labelRes);
     label.setShadow(0, 1, INK, 0, true, true); // hard 1 px drop shadow under the outline: crisp, pixel-art style
+    const plate = isMe ? this.add.graphics() : null;
     const emoteBg = this.add.image(0, -22, "emote-bg").setVisible(false);
     const emoteIcon = this.add.image(0, -22, emoteTexture("think")).setDisplaySize(16, 16).setVisible(false);
-    top.add([label, emoteBg, emoteIcon]);
+    top.add(plate ? [plate, label, emoteBg, emoteIcon] : [label, emoteBg, emoteIcon]);
     this.uiLayer.add(top);
 
     const seed = hashStr(a.id);
-    return {
+    const res: Resident = {
       id: a.id,
       data: a,
       root,
@@ -856,36 +975,65 @@ export class TownScene extends Phaser.Scene implements TownApi {
       ring,
       sel,
       sprite,
+      ghost,
+      light,
       texture,
       top,
       label,
+      plate,
       emoteBg,
       emoteIcon,
       emoteKey: null,
       bubble: null,
       bubbleSeenAt: null,
+      cues: [],
       x: 0,
       y: 0,
       dir: "down",
       walking: false,
       speedEma: 0,
       fresh: true,
-      locShown: null,
+      planLoc: this.safeLoc(a.travel ? a.travel.to : a.location),
+      stand: null,
+      standLoc: null,
       travelKey: null,
-      travelWalk: null,
-      catchUp: null,
-      slotLoc: null,
-      slotIdx: -1,
+      route: null,
+      vis: a.activity === "sleeping" && !a.travel && a.location === "home" ? 0 : 1,
+      phase: (seed % 628) / 100,
       rng: mulberry32(seed),
-      wx: 0,
-      wy: 0,
       wander: null,
       wUntil: 0,
-      wBase: null,
-      breathe: (seed % 100) / 15,
-      lift: 0,
-      liftCur: 0
+      labelLevel: 0,
+      labelLift: 0,
+      labelAlpha: 1
     };
+    this.drawPlate(res);
+    return res;
+  }
+
+  /** the dark, gold-edged plate (with a pointer towards the head) behind the guardian's Agent's name */
+  private drawPlate(res: Resident): void {
+    const g = res.plate;
+    if (!g) return;
+    const w = Math.ceil(res.label.width) + 8;
+    const h = Math.ceil(res.label.height) + 2;
+    const y0 = -PLATE_LIFT; // the plate's bottom edge
+    g.clear();
+    g.fillStyle(0x2b180d, 0.45);
+    this.steppedRect(g, -w / 2, y0 - h + 2, w, h);
+    g.fillStyle(0xf2c75c, 1);
+    this.steppedRect(g, -w / 2, y0 - h + 1, w, h);
+    g.fillStyle(0x2b180d, 0.94);
+    this.steppedRect(g, -w / 2 + 1, y0 - h + 2, w - 2, h - 2);
+    // the pointer: a gold stepped triangle under the plate
+    g.fillStyle(0xf2c75c, 1);
+    g.fillRect(-3, y0 + 1, 7, 1);
+    g.fillRect(-2, y0 + 2, 5, 1);
+    g.fillRect(-1, y0 + 3, 3, 1);
+    g.fillStyle(0x2b180d, 0.94);
+    g.fillRect(-2, y0, 5, 1);
+    g.fillRect(-1, y0 + 1, 3, 1);
+    res.label.setY(y0 - 1);
   }
 
   private applyData(res: Resident, a: AgentView): void {
@@ -894,8 +1042,12 @@ export class TownScene extends Phaser.Scene implements TownApi {
     if (prev.sprite !== a.sprite) {
       res.texture = spriteTexture(a.sprite);
       res.sprite.setTexture(res.texture, frameIndex(res.dir));
+      res.ghost.setTexture(res.texture, frameIndex(res.dir));
     }
-    if (prev.name !== a.name || prev.isPlayer !== a.isPlayer) res.label.setText(a.isPlayer ? `★ ${a.name}` : a.name);
+    if (prev.name !== a.name || prev.isPlayer !== a.isPlayer) {
+      res.label.setText(a.isPlayer ? `★ ${a.name}` : a.name);
+      this.drawPlate(res);
+    }
     // bubbles: a new atMs means a new line; on first sight only show fresh ones
     const b = a.bubble;
     if (b && b.text) {
@@ -941,7 +1093,12 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const box = this.add.container(0, 0, [frame, tail, t]);
     box.setAlpha(0);
     res.top.add(box);
-    res.bubble = { box, shownAt: performance.now() };
+    res.bubble = { box, shownAt: performance.now(), w, h: h + 6 };
+  }
+
+  /** whether the resident has come to rest (not on a road, not walking): only then do sleep / work poses apply */
+  private settled(res: Resident): boolean {
+    return !res.route && !res.walking;
   }
 
   private updateEmote(res: Resident): void {
@@ -951,6 +1108,8 @@ export class TownScene extends Phaser.Scene implements TownApi {
       if (a.activity === "sleeping") key = "sleep";
       else if (a.activity === "waiting") key = "wait";
     }
+    // the sleep symbol belongs to someone in bed, not to a resident who is still walking home
+    if (key === "sleep" && !this.settled(res)) key = null;
     if (key !== res.emoteKey) {
       res.emoteKey = key;
       if (!key) {
@@ -972,7 +1131,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     }
   }
 
-  // ───────────── slots ─────────────
+  // ───────────── where everybody stands ─────────────
 
   /** a location id we can place on the map (anything unknown falls back to the plaza) */
   private safeLoc(id: LocationId): LocationId {
@@ -988,279 +1147,352 @@ export class TownScene extends Phaser.Scene implements TownApi {
     return l.slots.length > 0 ? l.slots : l.door ? [l.door] : [{ x: 1, y: 1 }];
   }
 
-  private slotTile(res: Resident, loc: LocationId): TilePoint {
-    const slots = this.slotTiles(loc, res.data.homeSlot);
-    if (loc === "home") return slots[0];
-    if (res.slotLoc !== loc || res.slotIdx < 0 || res.slotIdx >= slots.length) {
-      // pick the free slot that is farthest from everybody already standing here
-      const takenIdx = new Set<number>();
-      const takenPts: TilePoint[] = [];
-      for (const o of this.residents.values()) {
-        if (o !== res && o.slotLoc === loc && o.slotIdx >= 0) {
-          takenIdx.add(o.slotIdx);
-          takenPts.push(slots[o.slotIdx]);
-        }
-      }
-      const start = hashStr(res.id) % slots.length;
-      let pick = -1;
-      let bestD = -1;
-      for (let k = 0; k < slots.length; k++) {
-        const idx = (start + k) % slots.length;
-        if (takenIdx.has(idx)) continue;
-        const d = takenPts.length === 0 ? 1 : Math.min(...takenPts.map((t) => Math.hypot(t.x - slots[idx].x, t.y - slots[idx].y)));
-        if (d > bestD + 0.5) {
-          bestD = d;
-          pick = idx;
-        }
-      }
-      if (pick < 0) pick = start;
-      res.slotLoc = loc;
-      res.slotIdx = pick;
-    }
-    return slots[res.slotIdx];
-  }
-
-  private releaseSlot(res: Resident): void {
-    res.slotLoc = null;
-    res.slotIdx = -1;
-  }
-
   private entryTile(loc: LocationId, homeSlot: number): TilePoint {
     return loc === "home" ? this.slotTiles("home", homeSlot)[0] : (this.model.locations[loc].door ?? this.slotTiles(loc, homeSlot)[0]);
   }
-
-  /** a free walkable tile next to `t` inside the location (collaborators stand side by side) */
-  private neighbourTile(loc: LocationId, t: TilePoint): TilePoint {
-    const set = this.walkSets[loc];
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1]]) {
-      const x = t.x + dx;
-      const y = t.y + dy;
-      if (set.has(y * this.model.width + x)) return { x, y };
-    }
-    return t;
-  }
-
-  // ───────────── per-frame resident logic ─────────────
 
   private tileKey(t: TilePoint): number {
     return t.y * this.model.width + t.x;
   }
 
-  /** where this resident *should* be right now, according to logical state */
-  private logicalTarget(res: Resident, simNow: number, dt: number, nowMs: number): { x: number; y: number; travelling: boolean; dirX: number; dirY: number } {
-    const a = res.data;
-    const loc = this.safeLoc(a.location);
-    const home = a.homeSlot;
-
-    // 1. on the road: walk the A* route between the two stand points, the elapsed fraction of the trip along it
-    if (a.travel) {
-      const tr = { ...a.travel, from: this.safeLoc(a.travel.from), to: this.safeLoc(a.travel.to) };
-      const key = `${tr.from}>${tr.to}@${tr.startMs}`;
-      if (res.travelKey !== key || !res.travelWalk) {
-        res.travelKey = key;
-        this.releaseSlot(res);
-        const from = this.entryTile(tr.from, home);
-        const to = this.slotTile(res, tr.to); // reserves the slot the resident will occupy on arrival
-        const tiles = this.finder.find(from, to) ?? [from, to];
-        res.travelWalk = tilesToWalk(tiles);
+  /** Give every resident its own tile at the place it is (or is walking) to. Runs with every snapshot; it is sticky,
+   *  so people who already stand somewhere valid stay put. Collaborators stand side by side, people who are
+   *  socializing at the same place gather in small groups, and nobody shares a tile (see standPlan.ts). */
+  private planAllStands(): void {
+    const byLoc = new Map<LocationId, Resident[]>();
+    for (const r of this.residents.values()) {
+      const a = r.data;
+      const loc = this.safeLoc(a.travel ? a.travel.to : a.location);
+      r.planLoc = loc;
+      if (loc === "home") {
+        r.stand = { tile: this.slotTiles("home", a.homeSlot)[0], mate: null, lead: true };
+        r.standLoc = "home";
+        continue;
       }
-      const span = Math.max(1, tr.endMs - tr.startMs);
-      const p = clamp((simNow - tr.startMs) / span, 0, 1);
-      const s = pointAlong(res.travelWalk, p * res.travelWalk.len);
-      res.locShown = tr.to; // when the road ends we are *at* the destination already
-      res.catchUp = null;
-      res.wander = null;
-      res.wBase = null;
-      return { x: s.x, y: s.y, travelling: p < 1, dirX: s.dx, dirY: s.dy };
+      const list = byLoc.get(loc);
+      if (list) list.push(r);
+      else byLoc.set(loc, [r]);
     }
-    res.travelKey = null;
-    res.travelWalk = null;
-
-    // 2. location changed without travel info (fast-forward jump etc.) → walk there along the roads, quickly
-    if (res.locShown !== loc) {
-      const first = res.locShown === null;
-      const base = this.standTile(res, loc);
-      const basePx = tileToWorld(base);
-      if (!first && !res.fresh) {
-        const from = { x: res.x, y: res.y };
-        if (dist(from, basePx) > 20) {
-          const tiles = this.finder.find(worldToTile(from.x, from.y), base);
-          if (tiles) {
-            const walk = tilesToWalk(tiles, from, undefined);
-            res.catchUp = { walk, dur: clamp(walk.len / CATCHUP_SPEED, 0.6, CATCHUP_MAX_S), t: 0 };
-          }
+    const w = this.model.width;
+    for (const [loc, list] of byLoc) {
+      const l = this.model.locations[loc];
+      const set = this.walkSets[loc];
+      const plan = planStands(
+        list.map((r) => ({
+          id: r.id,
+          isPlayer: r.data.isPlayer,
+          activity: r.data.activity,
+          partnerId: r.data.partnerId,
+          prev: r.stand && r.standLoc === loc ? r.stand.tile : null
+        })),
+        {
+          slots: l.slots.length > 0 ? l.slots : l.door ? [l.door] : [],
+          tiles: l.walkTiles,
+          walkable: (x, y) => set.has(y * w + x),
+          bench: (x, y) => this.benchFacing(x, y) !== null
+        }
+      );
+      for (const r of list) {
+        const spot = plan.get(r.id);
+        if (spot) {
+          r.stand = spot;
+          r.standLoc = loc;
         }
       }
-      res.locShown = loc;
-      res.wBase = null;
-      res.wander = null;
     }
-    if (res.catchUp) {
-      const c = res.catchUp;
-      c.t += dt;
-      const k = clamp(c.t / c.dur, 0, 1);
-      const s = pointAlong(c.walk, k * c.walk.len);
-      if (k >= 1) res.catchUp = null;
-      return { x: s.x, y: s.y, travelling: true, dirX: s.dx, dirY: s.dy };
+  }
+
+  /** which way someone working at (x, y) faces: towards the counter / forge / wall next to the tile; null in the open */
+  private benchFacing(x: number, y: number): Direction | null {
+    const k = y * this.model.width + x;
+    let d = this.faceCache.get(k);
+    if (d === undefined) {
+      const g = this.model.grid;
+      const blocked = (bx: number, by: number) => bx < 0 || by < 0 || bx >= g.width || by >= g.height || g.blocked[by * g.width + bx] === 1;
+      d = blocked(x, y - 1) ? "up" : blocked(x, y + 1) ? "down" : blocked(x - 1, y) ? "left" : blocked(x + 1, y) ? "right" : "none";
+      this.faceCache.set(k, d);
+    }
+    return d === "none" ? null : d;
+  }
+
+  // ───────────── per-frame resident logic ─────────────
+
+  /** another resident stands on, or is walking to, this tile */
+  private tileBusy(res: Resident, t: TilePoint): boolean {
+    const k = this.tileKey(t);
+    const c = tileToWorld(t);
+    for (const o of this.residents.values()) {
+      if (o === res) continue;
+      if (o.stand && this.tileKey(o.stand.tile) === k) return true;
+      if (Math.hypot(o.x - c.x, o.y - c.y) < 12) return true;
+    }
+    return false;
+  }
+
+  /** Move one resident for this frame, along the road network only: a trip the server announced (walked at least as
+   *  fast as TRIP_SPEED_MIN, so a short trip ends early and the resident waits at the door), a catch-up when the planned
+   *  tile changed, or a short stroll for someone who is just looking around. Returns the walking direction. */
+  private moveResident(res: Resident, simNow: number, dt: number, nowMs: number): { dx: number; dy: number } {
+    const a = res.data;
+    const tile = res.stand?.tile ?? this.entryTile(res.planLoc, a.homeSlot);
+
+    // 1. a trip the server announced: build the route once, from where the resident actually is
+    if (a.travel) {
+      const tr = a.travel;
+      const tkey = `${tr.from}>${tr.to}@${tr.startMs}`;
+      if (res.travelKey !== tkey) {
+        res.travelKey = tkey;
+        res.wander = null;
+        const fromTile = res.fresh ? this.entryTile(this.safeLoc(tr.from), a.homeSlot) : worldToTile(res.x, res.y);
+        const tiles = this.finder.find(fromTile, tile) ?? [fromTile, tile];
+        res.route = { walk: tilesToWalk(tiles, res.fresh ? undefined : { x: res.x, y: res.y }), d: 0, kind: "travel", speed: 0 };
+      }
+    } else {
+      res.travelKey = null; // an unfinished route is walked to its end below
     }
 
-    // 3. standing at the location (collaborating, sleeping, waiting are still)
-    const base = tileToWorld(this.standTile(res, loc));
-    const still = a.activity === "sleeping" || a.activity === "waiting" || a.activity === "collaborating" || loc === "home";
-    if (still) {
-      res.wBase = base;
-      res.wx = base.x;
-      res.wy = base.y;
-      res.wander = null;
-      return { x: base.x, y: base.y, travelling: false, dirX: 0, dirY: 0 };
+    // 2. standing: settle on the planned tile, or walk there when the plan changed (a partner arrived, the clock jumped)
+    if (!res.route) {
+      if (res.fresh) {
+        const p = tileToWorld(tile);
+        res.x = p.x;
+        res.y = p.y;
+        res.wander = null;
+        return { dx: 0, dy: 0 };
+      }
+      const canWander = a.activity === "idle" && res.planLoc !== "home" && !a.travel;
+      const here = worldToTile(res.x, res.y);
+      const away = here.x !== tile.x || here.y !== tile.y;
+      // an idle resident may stroll within three tiles of its stand tile; everybody else belongs exactly on it
+      const strolling = canWander && Math.max(Math.abs(here.x - tile.x), Math.abs(here.y - tile.y)) <= 3;
+      if (away && !strolling) {
+        const tiles = this.finder.find(here, tile) ?? [here, tile];
+        const walk = tilesToWalk(tiles, { x: res.x, y: res.y });
+        res.wander = null;
+        res.route = { walk, d: 0, kind: "catch", speed: clamp(walk.len / CATCH_SECONDS, CATCH_SPEED_MIN, CATCH_SPEED_MAX) };
+      }
     }
-    // gentle micro wander around the stand point, along tiles of the location's own area
-    if (!res.wBase || dist(res.wBase, base) > 1) {
-      res.wBase = base;
-      res.wx = base.x;
-      res.wy = base.y;
+
+    // 3. on a route: advance along it
+    if (res.route) {
+      const r = res.route;
+      const len = r.walk.len;
+      let goal = len;
+      if (r.kind === "travel" && a.travel && res.travelKey) {
+        const tr = a.travel;
+        const p = clamp((simNow - tr.startMs) / Math.max(1, tr.endMs - tr.startMs), 0, 1);
+        goal = Math.min(len, Math.max(p * len, (Math.max(0, simNow - tr.startMs) / 1000) * TRIP_SPEED_MIN));
+      }
+      if (res.fresh) r.d = goal;
+      else if (r.kind === "travel") r.d = Math.max(r.d, Math.min(goal, r.d + TRIP_SPEED_MAX * dt));
+      else r.d = Math.min(len, r.d + r.speed * dt);
+      const s = pointAlong(r.walk, r.d);
+      res.x = s.x;
+      res.y = s.y;
+      if (r.d >= len - 0.01) res.route = null;
+      return { dx: s.dx, dy: s.dy };
+    }
+
+    // 4. at rest. Only someone who is idle strolls around; everybody else keeps their tile
+    const canWander = a.activity === "idle" && res.planLoc !== "home" && !a.travel;
+    if (!canWander) {
       res.wander = null;
-      res.wUntil = nowMs + 800 + res.rng() * 3500;
+      return { dx: 0, dy: 0 };
     }
     if (res.wander) {
       const w = res.wander;
       w.d += WANDER_SPEED * dt;
       const s = pointAlong(w.walk, w.d);
-      res.wx = s.x;
-      res.wy = s.y;
+      res.x = s.x;
+      res.y = s.y;
       if (w.d >= w.walk.len) {
         res.wander = null;
         res.wUntil = nowMs + 2200 + res.rng() * 5200;
       }
-      return { x: res.wx, y: res.wy, travelling: false, dirX: s.dx, dirY: s.dy };
+      return { dx: s.dx, dy: s.dy };
     }
+    if (res.wUntil === 0) res.wUntil = nowMs + 800 + res.rng() * 3500;
     if (nowMs >= res.wUntil) {
-      const here = worldToTile(res.wx, res.wy);
-      const baseTile = worldToTile(base.x, base.y);
-      const loc3 = this.model.locations[loc];
-      const near = loc3.walkTiles.filter((t) => Math.max(Math.abs(t.x - baseTile.x), Math.abs(t.y - baseTile.y)) <= 3 && (t.x !== here.x || t.y !== here.y) && this.model.grid.cost[this.tileKey(t)] <= 2);
+      const here = worldToTile(res.x, res.y);
+      const base = tile;
+      const walkTiles = this.model.locations[res.planLoc].walkTiles;
+      const near = walkTiles.filter(
+        (t) => Math.max(Math.abs(t.x - base.x), Math.abs(t.y - base.y)) <= 3 && (t.x !== here.x || t.y !== here.y) && this.model.grid.cost[this.tileKey(t)] <= 2 && !this.tileBusy(res, t)
+      );
       for (let tries = 0; tries < 6 && near.length > 0; tries++) {
         const cand = near[Math.floor(res.rng() * near.length)];
         const tiles = this.finder.find(here, cand);
         if (tiles && tiles.length > 1 && tiles.length <= 9) {
-          res.wander = { walk: tilesToWalk(tiles, { x: res.wx, y: res.wy }), d: 0 };
+          res.wander = { walk: tilesToWalk(tiles, { x: res.x, y: res.y }), d: 0 };
           break;
         }
       }
       if (!res.wander) res.wUntil = nowMs + 3000;
     }
-    return { x: res.wx, y: res.wy, travelling: false, dirX: 0, dirY: 0 };
+    return { dx: 0, dy: 0 };
   }
 
-  /** the stand tile of a resident at a location (collaborators pair up side by side) */
-  private standTile(res: Resident, loc: LocationId): TilePoint {
+  /** the way a resident at rest faces, or null to keep the current facing */
+  private restFacing(res: Resident, timeSec: number): Direction | null {
     const a = res.data;
-    const base = this.slotTile(res, loc);
-    if (a.activity === "collaborating" && a.partnerId && loc !== "home") {
-      const partner = this.residents.get(a.partnerId);
-      if (partner && !partner.data.travel && partner.data.location === loc && partner.data.activity === "collaborating") {
-        // the lexicographically smaller id leads and keeps its slot; the follower stands right next to it
-        const lead = a.id < partner.id ? res : partner;
-        if (lead === res) return base;
-        return this.neighbourTile(loc, this.slotTile(partner, loc));
-      }
+    if (a.activity === "sleeping") return "down";
+    const working = a.activity === "working" || a.activity === "collaborating";
+    // at work they face the counter / forge / shelf next to them (partners at one bench face the same bench)
+    if (working && res.stand) {
+      const bench = this.benchFacing(res.stand.tile.x, res.stand.tile.y);
+      if (bench) return bench;
     }
-    return base;
+    // collaborators and people chatting look at each other
+    const mate = res.stand?.mate ? this.residents.get(res.stand.mate) : undefined;
+    if (mate && !mate.route && mate.planLoc === res.planLoc && Math.hypot(mate.x - res.x, mate.y - res.y) < 40) {
+      return dirFromVec(mate.x - res.x, (mate.y - res.y) * 0.4, res.dir);
+    }
+    // waiting for the guardian (or for a partner): glances left and right, never jumps about
+    if (a.activity === "waiting") return (["down", "left", "down", "right"] as const)[Math.floor(timeSec / 1.6 + res.phase) % 4];
+    if (working) return "down";
+    if (res.planLoc === "home") return "up"; // in front of the house, facing the door
+    return null;
+  }
+
+  /** The pairing cue: two residents who are working together stand on one teal ring (under both, above the ground), so
+   *  "these two are doing a job together" reads at any zoom, in addition to facing each other and tapping in counter-step. */
+  private updatePairs(timeSec: number): void {
+    const g = this.pairGfx;
+    g.clear();
+    const pulse = 0.5 + 0.5 * Math.sin(timeSec * 3);
+    for (const r of this.residents.values()) {
+      if (!r.stand?.lead || !r.stand.mate || r.data.activity !== "collaborating") continue;
+      const m = this.residents.get(r.stand.mate);
+      if (!m || m.data.activity !== "collaborating" || m.planLoc !== r.planLoc) continue;
+      if (r.route || m.route || Math.hypot(r.x - m.x, r.y - m.y) > 40) continue;
+      const cx = (r.x + m.x) / 2;
+      const cy = (r.y + m.y) / 2 - 1;
+      const w = Math.abs(r.x - m.x) + 30;
+      const h = Math.abs(r.y - m.y) + 14;
+      g.lineStyle(3, 0x2b180d, 0.5);
+      g.strokeEllipse(Math.round(cx), Math.round(cy + 1), w, h);
+      g.lineStyle(2, 0x7fdcf5, 0.55 + 0.35 * pulse);
+      g.strokeEllipse(Math.round(cx), Math.round(cy), w, h);
+    }
+  }
+
+  /** how much of the resident's body is behind a roof / canopy / beam tile (0..1) */
+  private coveredAmount(x: number, y: number): number {
+    const m = this.model;
+    let hits = 0;
+    for (const [ox, oy] of [[-5, -14], [5, -14], [0, -8], [-5, -3], [5, -3]]) {
+      const tx = Math.floor((x + ox) / 16);
+      const ty = Math.floor((y + oy) / 16);
+      if (tx >= 0 && ty >= 0 && tx < m.width && ty < m.height && m.covered[ty * m.width + tx]) hits++;
+    }
+    return hits / 5;
   }
 
   private updateResident(res: Resident, simNow: number, dt: number, nowMs: number, timeSec: number): void {
     const a = res.data;
-    const tgt = this.logicalTarget(res, simNow, dt, nowMs);
-
-    // follow the logical target with a little smoothing so state changes never teleport
     const px = res.x;
     const py = res.y;
-    if (res.fresh) {
-      res.x = tgt.x;
-      res.y = tgt.y;
-      res.fresh = false;
-    } else if (res.catchUp) {
-      res.x = tgt.x;
-      res.y = tgt.y;
-    } else {
-      const dx = tgt.x - res.x;
-      const dy = tgt.y - res.y;
-      const d = Math.hypot(dx, dy);
-      if (d > 0.01) {
-        const far = d > 80;
-        const k = 1 - Math.exp(-dt * (far ? 3 : 8));
-        const step = Math.min(d, Math.max(d * k, (far ? 90 : 18) * dt));
-        res.x += (dx / d) * step;
-        res.y += (dy / d) * step;
-      }
-    }
-    const vx = dt > 0 ? (res.x - px) / dt : 0;
-    const vy = dt > 0 ? (res.y - py) / dt : 0;
+    const wasFresh = res.fresh;
+    const mv = this.moveResident(res, simNow, dt, nowMs);
+    res.fresh = false;
+
+    // measured speed -> walking state (with a little hysteresis) -> facing + animation
+    const vx = dt > 0 && !wasFresh ? (res.x - px) / dt : 0;
+    const vy = dt > 0 && !wasFresh ? (res.y - py) / dt : 0;
     const speed = Math.hypot(vx, vy);
     res.speedEma = lerp(res.speedEma, speed, 1 - Math.exp(-dt * 10));
-    const sleeping = a.activity === "sleeping";
-    const waiting = a.activity === "waiting";
-    const onRoad = tgt.travelling && !sleeping;
-    res.walking = !sleeping && (onRoad || res.speedEma > 6);
+    res.walking = res.speedEma > (res.walking ? 1.2 : 2.6);
+    const settled = this.settled(res);
 
-    // facing follows the direction of movement
-    if (!sleeping && !waiting) {
-      if (speed > 4) res.dir = dirFromVec(vx, vy, res.dir);
-      else res.dir = dirFromVec(tgt.dirX, tgt.dirY, res.dir);
+    if (res.walking) {
+      res.dir = Math.abs(mv.dx) + Math.abs(mv.dy) > 0.01 ? dirFromVec(mv.dx, mv.dy, res.dir) : dirFromVec(vx, vy, res.dir);
+    } else if (settled) {
+      const f = this.restFacing(res, timeSec);
+      if (f) res.dir = f;
     }
-    if (a.activity === "collaborating" && a.partnerId && !res.walking) {
-      const partner = this.residents.get(a.partnerId);
-      if (partner) res.dir = dirFromVec(partner.x - res.x, (partner.y - res.y) * 0.2, res.dir);
-    }
-    if (waiting || sleeping) res.dir = "down";
 
-    // animation: walk cycle while moving, standing frame otherwise
     if (res.walking) {
       res.sprite.anims.play(animKey(res.texture, "walk", res.dir), true);
-      res.sprite.anims.timeScale = clamp(0.75 + res.speedEma / 40, 0.75, 1.4);
+      // feet and ground move together: the cycle runs as fast as the ground goes by
+      res.sprite.anims.timeScale = clamp(res.speedEma / (STRIDE_PX * WALK_FPS), 0.3, 1.8);
     } else {
       if (res.sprite.anims.isPlaying) res.sprite.anims.stop();
       res.sprite.setFrame(frameIndex(res.dir));
     }
-    res.sprite.x = 0;
-    if (sleeping) {
-      res.breathe += dt * 1.1;
-      res.sprite.y = 0;
-      res.sprite.setTint(0x8f9fd6);
-      res.sprite.setAlpha(0.78);
-      res.shadow.setAlpha(0.6);
-    } else {
-      const hop = waiting ? Math.max(0, Math.sin(timeSec * 2.4)) ** 6 * 1.6 : 0;
-      res.sprite.y = -Math.round(hop);
-      res.sprite.clearTint();
-      res.sprite.setAlpha(1);
-      res.shadow.setAlpha(0.9);
+
+    // poses at rest: a worker taps (a partner in counter-step), someone speaking nods, a sleeper goes indoors
+    const asleepInside = a.activity === "sleeping" && res.planLoc === "home" && settled;
+    const asleepOutside = a.activity === "sleeping" && res.planLoc !== "home" && settled;
+    res.vis = wasFresh ? (asleepInside ? 0 : 1) : approach(res.vis, asleepInside ? 0 : 1, dt * 2.2);
+    let tap = 0;
+    if (settled && (a.activity === "working" || a.activity === "collaborating")) {
+      tap = Math.sin(timeSec * 7 + res.phase + (res.stand?.lead === false ? Math.PI : 0)) > 0.45 ? 1 : 0;
+    } else if (settled && res.bubble && a.activity !== "sleeping") {
+      tap = Math.sin(timeSec * 9) > 0.7 ? 1 : 0;
     }
+    res.sprite.x = 0;
+    res.sprite.y = -tap;
+    if (asleepOutside) {
+      res.sprite.setTint(0x8f9fd6);
+      res.sprite.setAlpha(0.78 * res.vis);
+    } else {
+      res.sprite.clearTint();
+      res.sprite.setAlpha(res.vis);
+    }
+    res.sprite.setVisible(res.vis > 0.02);
+    res.shadow.setAlpha(0.9 * res.vis);
 
     // placement + depth: y-sorted between the ground layers and the `above` layer
     res.root.setPosition(Math.round(res.x), Math.round(res.y));
     res.root.setDepth(DEPTH.residents + res.y);
     if (res.ring) {
       const pulse = 0.5 + 0.5 * Math.sin(timeSec * 3.2);
-      res.ring.setScale(0.3 + pulse * 0.03);
-      res.ring.setAlpha(0.65 + pulse * 0.35);
+      res.ring.setAlpha(0.7 + pulse * 0.3);
     }
     const selected = this.selectedId === res.id;
     res.sel.setVisible(selected);
     if (selected) res.sel.setAlpha(0.7 + 0.3 * Math.sin(timeSec * 5));
 
-    // label / emote / bubble live in the top layer; scaled against zoom so text keeps its screen size
+    // see-through copy while a roof, canopy or beam hides the resident
+    const cover = res.vis > 0.5 ? this.coveredAmount(res.x, res.y) : 0;
+    if (cover >= 0.4) {
+      res.ghost.setVisible(true);
+      res.ghost.setFrame(res.sprite.frame.name);
+      res.ghost.setPosition(Math.round(res.x), Math.round(res.y - tap));
+      res.ghost.setAlpha((a.isPlayer ? 0.62 : 0.4) * cover);
+    } else if (res.ghost.visible) {
+      res.ghost.setVisible(false);
+    }
+
+    // a lamp glow around the resident at night (nobody glows from inside their bed)
+    const glow = this.lightK * (a.isPlayer ? 0.8 : 0.5) * res.vis;
+    if (glow > 0.02) {
+      res.light.setVisible(true);
+      res.light.setAlpha(glow);
+      res.light.setPosition(Math.round(res.x), Math.round(res.y - 7));
+    } else if (res.light.visible) {
+      res.light.setVisible(false);
+    }
+
+    this.updateEmote(res);
+  }
+
+  /** label / emote / bubble / cues live in the top layer, scaled against zoom so text keeps its screen size */
+  private updateTop(res: Resident, nowMs: number, timeSec: number): void {
     const zoom = this.cameras.main.zoom;
     const s = clamp(1 / zoom, 0.18, 1.2);
+    const base = res.plate ? PLATE_LIFT + 3 : 0; // the guardian's name plate rides a little higher (its pointer needs room)
     res.top.setScale(s);
-    res.top.setPosition(Math.round(res.x), Math.round(res.y - CHAR_H - 2 / zoom - res.liftCur));
+    res.top.setPosition(Math.round(res.x), Math.round(res.y - CHAR_H - (2 + res.labelLift) / zoom));
     res.top.setDepth(100 + res.y);
-    this.updateEmote(res);
+    res.top.setAlpha(res.labelAlpha);
+    res.top.setVisible(res.labelAlpha > 0.02);
+    const lh = res.label.height;
     if (res.emoteKey) {
-      const bobY = Math.sin(timeSec * 3 + res.breathe) * 1.6;
-      const ey = -(res.label.height + 14) + bobY;
-      res.emoteBg.setY(ey);
-      res.emoteIcon.setY(ey);
+      const bobY = Math.sin(timeSec * 3 + res.phase) * 1.6;
+      const ey = -(base + lh + 14) + bobY;
+      res.emoteBg.setY(Math.round(ey));
+      res.emoteIcon.setY(Math.round(ey));
     }
     if (res.bubble) {
       const age = nowMs - res.bubble.shownAt;
@@ -1271,11 +1503,21 @@ export class TownScene extends Phaser.Scene implements TownApi {
         res.bubble.box.destroy();
         res.bubble = null;
       } else {
-        const by = -(res.label.height + 4) - (res.emoteKey ? 26 : 0) - (1 - clamp(age / 160, 0, 1)) * 6;
-        res.bubble.box.setPosition(0, by);
+        const by = -(base + lh + 4) - (res.emoteKey ? 26 : 0) - (1 - clamp(age / 160, 0, 1)) * 6;
+        res.bubble.box.setPosition(0, Math.round(by));
         res.bubble.box.setAlpha(clamp(alpha, 0, 1));
       }
     }
+  }
+
+  /** how far above the tag's baseline (screen px) the resident's stack of label + emote + bubble reaches */
+  private stackHeight(res: Resident): number {
+    const base = res.plate ? PLATE_LIFT + 3 : 0;
+    const lh = res.label.height;
+    let top = base + lh;
+    if (res.emoteKey) top = Math.max(top, base + lh + 26);
+    if (res.bubble) top = Math.max(top, base + lh + 4 + (res.emoteKey ? 26 : 0) + res.bubble.h);
+    return top;
   }
 
   update(time: number, delta: number): void {
@@ -1283,42 +1525,249 @@ export class TownScene extends Phaser.Scene implements TownApi {
     const dt = Math.min(delta, 100) / 1000;
     const nowMs = performance.now();
     const simNow = this.estSimNow();
+    this.updateGrade(dt);
     for (const res of this.residents.values()) this.updateResident(res, simNow, dt, nowMs, time / 1000);
     this.updateDog(dt, nowMs);
-    this.separateLabels(dt);
-    this.updatePlaceLabels();
-    this.updateGrade(dt);
+    this.updatePairs(time / 1000);
+    this.layoutLabels(dt);
+    for (const res of this.residents.values()) this.updateTop(res, nowMs, time / 1000);
+    this.updateCues(dt, nowMs);
+    this.updateLights();
+    this.updateHover();
     this.updateCamera(dt);
   }
 
-  /** stack name tags upwards when two residents stand so close that the tags would overlap */
-  private separateLabels(dt: number): void {
-    const list = Array.from(this.residents.values()).sort((a, b) => a.y - b.y || a.x - b.x);
-    const done: Resident[] = [];
+  /** Name tags in screen space: every tag tries to sit right above its owner; when that spot is taken it is lifted a
+   *  step, and when the highest step is taken too, the lowest-priority tag is hidden. The guardian's Agent, the
+   *  selected / hovered resident and anyone showing a cue or a line of speech are never hidden. Place plaques take
+   *  part as the lowest priority (they hide instead of lifting). */
+  private layoutLabels(dt: number): void {
     const zoom = this.cameras.main.zoom;
-    const s = clamp(1 / zoom, 0.18, 1.2);
-    const reachX = 52 * s;
-    const step = 19 * s;
-    for (const r of list) {
-      let lift = 0;
-      for (let pass = 0; pass < 4; pass++) {
-        let hit = false;
-        for (const o of done) {
-          if (Math.abs(o.x - r.x) < reachX && Math.abs(o.y - o.lift - (r.y - lift)) < step) {
-            hit = true;
-            break;
-          }
-        }
-        if (!hit) break;
-        lift += step;
-      }
-      r.lift = lift;
-      done.push(r);
+    const boxes: LabelBox[] = [];
+    const k = 1 - Math.exp(-dt * 12);
+    for (const r of this.residents.values()) {
+      const sc = this.worldToScreen(r.x, r.y);
+      const lw = Math.ceil(r.label.width) + (r.plate ? 8 : 2);
+      const width = Math.max(lw, r.emoteKey ? 24 : 0, r.bubble ? r.bubble.w : 0);
+      const pinned = r.data.isPlayer || this.selectedId === r.id || this.hoverResId === r.id || r.cues.length > 0 || !!r.bubble;
+      boxes.push({
+        id: r.id,
+        x: sc.x,
+        y: sc.y - CHAR_H * zoom - 2,
+        w: width,
+        h: this.stackHeight(r),
+        priority: r.data.isPlayer ? 0 : this.selectedId === r.id || this.hoverResId === r.id ? 1 : pinned ? 2 : 10,
+        pinned,
+        maxLevel: 2,
+        level: r.labelLevel,
+        // (only the name tag's own height decides the lift step: stacks above it follow it)
+      });
     }
-    const k = 1 - Math.exp(-dt * 10);
-    for (const r of list) {
-      r.liftCur = lerp(r.liftCur, r.lift, k);
-      r.top.setY(Math.round(r.y - CHAR_H - 2 / zoom - r.liftCur));
+    const showPlaces = zoom <= 3.4;
+    for (const l of this.placeLabels) {
+      const hide = !showPlaces || this.hovered?.location === l.id;
+      if (hide) continue;
+      const sc = this.worldToScreen(l.ax, l.ay);
+      boxes.push({ id: `place:${l.id}`, x: sc.x, y: sc.y - 2, w: l.w, h: l.h, priority: 50, pinned: false, maxLevel: 0, level: 0 });
+    }
+    const slots = layoutLabels(boxes, 17, 2);
+    for (const r of this.residents.values()) {
+      const slot = slots.get(r.id);
+      const lift = slot ? slot.level * 17 : 0;
+      if (slot) r.labelLevel = slot.level;
+      r.labelLift = lerp(r.labelLift, lift, k);
+      r.labelAlpha = lerp(r.labelAlpha, slot?.hidden ? 0 : 1, k);
+      if (Math.abs(r.labelAlpha - (slot?.hidden ? 0 : 1)) < 0.02) r.labelAlpha = slot?.hidden ? 0 : 1;
+    }
+    const s = clamp(1 / zoom, 0.18, 1.2);
+    for (const l of this.placeLabels) {
+      const slot = slots.get(`place:${l.id}`);
+      const want = slot && !slot.hidden ? 0.95 : 0;
+      l.alpha = lerp(l.alpha, want, k);
+      l.box.setVisible(l.alpha > 0.02);
+      l.box.setAlpha(l.alpha);
+      l.box.setScale(s);
+      l.box.setPosition(Math.round(l.ax), Math.round(l.ay - 2 / zoom));
+    }
+  }
+
+  // ───────────── results on the map: floating cues ─────────────
+
+  /** Feed items that arrived since the last snapshot become short chips above their actors (see feedCues.ts for the
+   *  rules: only real items, only numbers that are in the item's own text). The first snapshot of a session is history:
+   *  no cues. A burst (a fast-forward) is thinned to CUE_BURST_LIMIT, the guardian's own Agent first. */
+  private ingestFeed(): void {
+    const feed = this.snapshot?.feed;
+    if (!feed) return;
+    const maxId = feed.reduce((m, f) => Math.max(m, f.id), 0);
+    if (!this.feedSeen || maxId < this.feedMaxId) {
+      // first snapshot, or a different save (ids went backwards): everything in the feed is history
+      this.feedSeen = new Set(feed.map((f) => f.id));
+      this.feedMaxId = maxId;
+      return;
+    }
+    const seen = this.feedSeen;
+    const fresh = feed.filter((f) => !seen.has(f.id) && f.importance >= 2 && CUE_KINDS.has(f.kind)).sort((x, y) => x.atMs - y.atMs || x.id - y.id);
+    this.feedSeen = new Set(feed.map((f) => f.id));
+    this.feedMaxId = Math.max(this.feedMaxId, maxId);
+    if (fresh.length === 0 || document.visibilityState === "hidden") return;
+    const cues: Cue[] = [];
+    for (const item of fresh) cues.push(...cuesForFeedItem(item).filter((c) => this.residents.has(c.actor)));
+    const kept = thinCues(cues, CUE_BURST_LIMIT, this.snapshot?.player?.agent.id ?? null);
+    const now = performance.now();
+    // one item's cues start together; the next item's a moment later, so a busy hour reads as a sequence
+    let at = now;
+    let lastItemKey = "";
+    kept.forEach((cue, i) => {
+      const itemKey = cue.text + cue.icon;
+      if (i > 0 && itemKey !== lastItemKey) at += CUE_STAGGER_MS;
+      lastItemKey = itemKey;
+      this.cueQueue.push({ actor: cue.actor, cue, at });
+    });
+  }
+
+  private cueIconKey(icon: CueIcon, tone: CueTone): string | null {
+    if (icon === "none") return null;
+    const key = icon === "coin" ? "cue-coin" : `cue-${icon}-${tone}`;
+    if (this.textures.exists(key)) return key;
+    const rows = CUE_ICONS[icon];
+    const px = 2;
+    const fg = CUE_TONES[tone].css;
+    const colors: Record<string, string> = { X: fg, O: "#2b180d", G: "#f2c75c", H: "#fff1a8", D: "#b9842a" };
+    const tex = this.textures.createCanvas(key, rows[0].length * px, rows.length * px);
+    if (!tex) return null;
+    const c = tex.getContext();
+    rows.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        const col = colors[row[x]];
+        if (!col) continue;
+        c.fillStyle = col;
+        c.fillRect(x * px, y * px, px, px);
+      }
+    });
+    tex.refresh();
+    tex.setFilter(Phaser.Textures.FilterMode.NEAREST);
+    return key;
+  }
+
+  private spawnCue(res: Resident, cue: Cue, nowMs: number): void {
+    const key = `${cue.icon}|${cue.text}`;
+    if (res.cues.some((c) => c.key === key && nowMs - c.born < 3500)) return; // the same result twice in a row is one chip
+    while (res.cues.length >= CUE_MAX_PER_RESIDENT) res.cues.shift()?.box.destroy();
+    const tone = CUE_TONES[cue.tone];
+    const iconKey = this.cueIconKey(cue.icon, cue.tone);
+    const text = cue.text ? this.add.text(0, 0, cue.text, { fontFamily: FONT, fontSize: "12px", color: tone.css }).setOrigin(0, 0.5).setResolution(this.labelRes) : null;
+    const iconImg = iconKey ? this.add.image(0, 0, iconKey).setOrigin(0, 0.5) : null;
+    const iw = iconImg ? iconImg.width : 0;
+    const w = 6 + iw + (iconImg && text ? 4 : 0) + (text ? Math.ceil(text.width) : 0) + 6;
+    const h = 20;
+    const g = this.add.graphics();
+    g.fillStyle(0x2b180d, 0.5);
+    this.steppedRect(g, -w / 2, -h + 1, w, h);
+    g.fillStyle(tone.edge, 1);
+    this.steppedRect(g, -w / 2, -h, w, h);
+    g.fillStyle(0x2b180d, 0.95);
+    this.steppedRect(g, -w / 2 + 1, -h + 1, w - 2, h - 2);
+    let x = Math.round(-w / 2 + 6);
+    const parts: Phaser.GameObjects.GameObject[] = [g];
+    if (iconImg) {
+      iconImg.setPosition(x, Math.round(-h / 2));
+      parts.push(iconImg);
+      x += iw + (text ? 4 : 0);
+    }
+    if (text) {
+      text.setPosition(x, Math.round(-h / 2));
+      parts.push(text);
+    }
+    const box = this.add.container(0, 0, parts);
+    box.setAlpha(0);
+    res.top.add(box);
+    res.cues.push({ box, born: nowMs, key, y: -1 });
+  }
+
+  private updateCues(dt: number, nowMs: number): void {
+    // start the cues that are due; one that waited far too long (the tab was in the background) is dropped, not replayed
+    if (this.cueQueue.length > 0) {
+      const rest: typeof this.cueQueue = [];
+      for (const q of this.cueQueue) {
+        if (q.at > nowMs) rest.push(q);
+        else if (nowMs - q.at <= CUE_STALE_MS) {
+          const res = this.residents.get(q.actor);
+          if (res) this.spawnCue(res, q.cue, nowMs);
+        }
+      }
+      this.cueQueue = rest;
+    }
+    const k = 1 - Math.exp(-dt * 14);
+    for (const r of this.residents.values()) {
+      if (r.cues.length === 0) continue;
+      const top = this.stackHeight(r);
+      let slot = 0;
+      for (let i = r.cues.length - 1; i >= 0; i--) {
+        const c = r.cues[i];
+        const age = nowMs - c.born;
+        if (age > CUE_MS) {
+          c.box.destroy();
+          r.cues.splice(i, 1);
+          continue;
+        }
+        // newest nearest the head; older ones are pushed up a slot; each chip also drifts up a little as it ages
+        const target = top + 5 + slot * 22 + clamp(age / 420, 0, 1) * 8;
+        c.y = c.y < 0 ? target : lerp(c.y, target, k);
+        c.box.setY(-Math.round(c.y));
+        const fadeIn = clamp(age / 140, 0, 1);
+        const fadeOut = age > CUE_MS - 500 ? clamp((CUE_MS - age) / 500, 0, 1) : 1;
+        c.box.setAlpha(fadeIn * fadeOut);
+        slot++;
+      }
+    }
+  }
+
+  // ───────────── night lights ─────────────
+
+  /** Warm pools of light that come on at dusk and keep the town readable at night: one at every door (a house whose
+   *  owner sleeps goes dark), and one per lamp the map lists in its optional `lights` object layer (points; custom
+   *  property `radius` in px, default 28). Residents carry their own glow (see updateResident). */
+  private buildLights(raw: TiledMap): void {
+    const add = (x: number, y: number, radius: number, kind: "door" | "lamp", base: number, tint: number, homeSlot = -1) => {
+      const img = this.add
+        .image(Math.round(x), Math.round(y), "light-soft")
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(DEPTH.grade + 3)
+        .setScale((radius * 2) / 128)
+        .setTint(tint)
+        .setVisible(false);
+      this.nightLights.push({ img, kind, base, homeSlot });
+    };
+    for (const [id, loc] of Object.entries(this.model.locations)) {
+      if (id === "home" || !loc.door) continue;
+      const p = tileToWorld(loc.door);
+      add(p.x, p.y - 12, 30, "door", 0.5, 0xffd9a0);
+    }
+    for (const h of this.model.homeDoors) {
+      const p = tileToWorld(h.tile);
+      add(p.x, p.y - 12, 26, "door", 0.55, 0xffd9a0, h.slot);
+    }
+    const layer = raw.layers.find((l) => l.type === "objectgroup" && l.name === "lights");
+    for (const o of layer?.objects ?? []) {
+      const radius = Number(o.properties?.find((p) => p.name === "radius")?.value ?? 28);
+      add(o.x, o.y, radius, "lamp", 0.5, 0xffc878);
+    }
+  }
+
+  private updateLights(): void {
+    const k = this.lightK;
+    // who sleeps behind which front door
+    const dark = new Set<number>();
+    if (k > 0.02) for (const r of this.residents.values()) if (r.data.activity === "sleeping" && r.planLoc === "home" && r.vis < 0.5) dark.add(Math.floor(r.data.homeSlot));
+    for (const l of this.nightLights) {
+      const flicker = l.kind === "lamp" ? 0.94 + 0.06 * Math.sin(this.time.now / 380 + l.img.x * 0.7) : 1;
+      const out = l.homeSlot >= 0 && dark.has(l.homeSlot) ? 0.12 : 1;
+      const a = k * l.base * flicker * out;
+      if (a > 0.02) {
+        l.img.setVisible(true);
+        l.img.setAlpha(a);
+      } else if (l.img.visible) l.img.setVisible(false);
     }
   }
 
@@ -1336,6 +1785,8 @@ export class TownScene extends Phaser.Scene implements TownApi {
     g.night = lerp(g.night, target.night, k);
     g.warm = lerp(g.warm, target.warm, k);
     g.warmColor = lerpColor(g.warmColor, target.warmColor, k);
+    // the lamps come on as the evening grade rises and go out in the morning (follows the same smooth curve)
+    this.lightK = clamp(g.night * 2 + g.warm * 0.5, 0, 1);
 
     const key = `${g.bright.toFixed(3)}|${g.night.toFixed(3)}|${g.warm.toFixed(3)}`;
     if (key === this.lastGradeKey) return;
@@ -1566,6 +2017,7 @@ export class TownScene extends Phaser.Scene implements TownApi {
     if (!p.isDown) {
       // hover: residents first, then buildings / landmarks
       const hit = this.hitResident(p.x, p.y);
+      this.hoverResId = hit?.id ?? null; // a hovered resident always shows its name
       const w = this.screenToWorld(p.x, p.y);
       const it = hit ? null : interactableAt(this.model, w.x, w.y);
       this.setHover(it);

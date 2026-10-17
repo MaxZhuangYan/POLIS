@@ -29,6 +29,9 @@
 //     door          point props: location             — the ENTRY tile centre in front of a building's door (walkable)
 //     home_door     point props: slot (0..8), location="home" — entry tile in front of each residence
 //     interactable  rect  props: location (+ slot)    — click / hover target over a building or landmark
+//   optional object layer `lights` (own layer; the game only draws it at night):
+//     lamp / lantern  point  props: radius (px)        — a pool of warm light around a street lamp / stone lantern
+//                         (doors need no entry: the game lights every door it already knows)
 //
 // Everything is deterministic (seeded PRNG), so the committed .tmj is exactly what this script produces.
 
@@ -893,6 +896,13 @@ for (const it of interactables) {
   objects.push(obj(`${it.loc}${it.slot !== undefined ? `-${it.slot}` : ""}`, "interactable", x0, y0, x1 - x0 + 1, y1 - y0 + 1, props));
 }
 
+// night lights: one pool per street lamp and stone lantern placed above (the game lights the doors by itself)
+const lightObjects = [];
+for (const [name, x, y] of PLACED) {
+  if (name === "lamp") lightObjects.push(obj("lamp", "lamp", x + 0.5, y + 0.5, 0, 0, [prop("radius", 30)], true));
+  else if (name === "lanternG") lightObjects.push(obj("lantern", "lantern", x + 0.5, y + 0.5, 0, 0, [prop("radius", 20)], true));
+}
+
 // tile properties: movement cost per tile id (see header)
 const tileProps = new Map();
 const setCost = (c, r, v) => tileProps.set(r * COLS + c, v);
@@ -932,6 +942,7 @@ for (const n of layerOrder) layers.push(tileLayer(n, L[n]));
 layers.push(tileLayer("collision", collisionLayer, { visible: false, opacity: 0.5 }));
 layers.push(tileLayer("above", L.above));
 layers.push({ id: layerId++, name: "locations", type: "objectgroup", draworder: "topdown", opacity: 1, visible: true, x: 0, y: 0, objects });
+layers.push({ id: layerId++, name: "lights", type: "objectgroup", draworder: "topdown", opacity: 1, visible: true, x: 0, y: 0, objects: lightObjects });
 
 const tmj = {
   compressionlevel: -1,
