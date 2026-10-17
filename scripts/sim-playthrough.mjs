@@ -84,6 +84,8 @@ async function main() {
       POLIS_TEST_MODE: "1",
       POLIS_DB_PATH: DB_PATH,
       NEXT_DIST_DIR: `.next-sim-${POLICY}`,
+      // behind an egress proxy (cloud sessions) Node's fetch only uses HTTPS_PROXY when told to (Node >= 22.21)
+      ...(process.env.HTTPS_PROXY || process.env.https_proxy ? { NODE_USE_ENV_PROXY: "1" } : {}),
       // SIM_LLM=env: use the endpoint configured in .env.local / the environment (a real model run)
       ...(process.env.SIM_LLM === "env"
         ? {}

@@ -144,6 +144,8 @@ export async function startDevServer(o) {
     POLIS_DB_PATH: o.dbPath,
     NEXT_DIST_DIR: distDir,
     NEXT_TELEMETRY_DISABLED: "1",
+    // behind an egress proxy (cloud sessions) Node's fetch only uses HTTPS_PROXY when told to (Node >= 22.21)
+    ...(process.env.HTTPS_PROXY || process.env.https_proxy ? { NODE_USE_ENV_PROXY: "1" } : {}),
     ...(o.testMode === false ? {} : { POLIS_TEST_MODE: "1" }),
     ...(o.llm === "env" ? {} : { POLIS_LLM: "off" }),
     ...o.env,

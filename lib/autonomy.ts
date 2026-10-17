@@ -169,6 +169,25 @@ function ruleJudge(agentId: string, moment: MomentRow, chosen: MomentOption, opt
   const conflict = top.find((p) => p.weight >= 0.5 && Math.sign(p.stance_dir) !== chosenDir && chosenDir !== 0) ?? null;
   const support = top.find((p) => Math.sign(p.stance_dir) === chosenDir) ?? null;
 
+  // Torn: it holds principles on both sides. Each side weighs its principle plus the facts that back it (0.15 a fact,
+  // two at most); it pushes back only when the side against the guardian's choice is heavier. The rule is symmetric, so
+  // whichever option the guardian picks, it never refuses both ways of the same fork. Otherwise it goes along and says
+  // it is of two minds. (The D5 bait is exempt: there the facts, not a principle, carry the case.)
+  if (conflict && support && !ctx.bait) {
+    const side = (p: PrincipleRow) => p.weight + 0.15 * Math.min(2, evidenceFor(agentId, moment, p).length);
+    if (side(support) >= side(conflict)) {
+      return {
+        decision: "execute",
+        cited: support,
+        toPlayer: `好。你说过『${support.text}』，也说过『${conflict.text}』——这回两头都有理，就按你说的。`,
+        reasons: [`与原则『${support.text}』一致`, `与原则『${conflict.text}』相左，但这一边不更重`],
+        alt: null,
+        source: "rules",
+        gate: "judged",
+      };
+    }
+  }
+
   if (!conflict) {
     if (support) {
       // it knows how often the two of them have agreed on this one before (judgments citing it), and says so
