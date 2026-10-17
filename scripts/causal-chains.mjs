@@ -55,13 +55,19 @@ for (const w of wrongs) {
   for (const j of db.prepare("SELECT id, created_ms, decision, status, to_player FROM judgments WHERE created_ms > ? AND instr(to_player, ?) > 0 ORDER BY created_ms").all(w.at_ms, frag)) {
     links.push({ at: j.created_ms, row: `judgments#${j.id}`, text: `它对守护灵的建议说「${j.decision}」（${j.status}）：${j.to_player.slice(0, 60)}…` });
   }
-  for (const e of db.prepare("SELECT id, at_ms, kind, text FROM events WHERE at_ms > ? AND kind IN ('refuse','relationship') AND instr(text, ?) > 0 ORDER BY at_ms").all(w.at_ms, frag)) {
+  // the same words can belong to two different wrongs (Tao holds the same complaint against two people): the event
+  // must name both the one who holds it and the one it is held against
+  for (const e of db
+    .prepare("SELECT id, at_ms, kind, text FROM events WHERE at_ms > ? AND kind IN ('refuse','relationship') AND instr(text, ?) > 0 AND actors_json LIKE ? AND actors_json LIKE ? ORDER BY at_ms")
+    .all(w.at_ms, frag, `%"${w.holder_id}"%`, `%"${w.offender_id}"%`)) {
     links.push({ at: e.at_ms, row: `events#${e.id}`, text: e.text });
   }
-  // repairs between the two afterwards
+  // repairs between the two afterwards: an apology or compensation whose sentence names both of them
   for (const e of db
-    .prepare("SELECT id, at_ms, text FROM events WHERE at_ms > ? AND (text LIKE '%道歉%' OR text LIKE '%补偿%' OR text LIKE '%旧账%') AND actors_json LIKE ? AND actors_json LIKE ? ORDER BY at_ms")
-    .all(w.at_ms, `%"${w.holder_id}"%`, `%"${w.offender_id}"%`)) {
+    .prepare(
+      "SELECT id, at_ms, text FROM events WHERE at_ms > ? AND (text LIKE '%道歉%' OR text LIKE '%补偿%') AND actors_json LIKE ? AND actors_json LIKE ? AND instr(text, ?) > 0 AND instr(text, ?) > 0 ORDER BY at_ms",
+    )
+    .all(w.at_ms, `%"${w.holder_id}"%`, `%"${w.offender_id}"%`, name(w.holder_id), name(w.offender_id))) {
     links.push({ at: e.at_ms, row: `events#${e.id}`, text: e.text });
   }
   links.sort((a, b) => a.at - b.at);
