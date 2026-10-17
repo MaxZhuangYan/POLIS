@@ -2,7 +2,8 @@
 // Playtest "sizes": one lived-in save, every panel, at four window sizes (two desktop, two phone).
 //
 //   builds the save through the API (create, the three forks, three days of fast-forward), then for each size:
-//   title -> 继续 -> town; 烙印 drawer; 公告栏; 账本; the postcards; a fork if one is pending; key help.
+//   title -> 继续 -> town; 烙印 drawer; 公告栏; 账本; the postcards; a fork if one is pending; 帮助 (with the keys);
+//   on phones the lookups are reached through 更多.
 //   Each screen is screenshotted; the run fails on page errors, HTTP 5xx or a horizontally scrolling page.
 //
 //   npm run playtest:sizes          (output: playtest-output/sizes/)
@@ -67,16 +68,26 @@ const { ok } = await runPlaytest("sizes", { title: "one save, every panel, 1280 
         await page.waitForTimeout(300);
       };
       if (size.mobile) {
+        // phones: the guardian's verbs are in the dock; the lookups, help and settings are inside 更多
+        const viaMore = (label) => async () => {
+          await clickBtn(page, /^更多$/, { tap: true });
+          await page.waitForTimeout(400);
+          await clickBtn(page, new RegExp(`^${label}`), { tap: true });
+        };
         await open("imprints", () => clickBtn(page, /^烙印$/, { tap: true }));
-        await open("board", () => clickBtn(page, /^公告栏$/, { tap: true }), "公告栏");
-        await open("ledger", () => clickBtn(page, /^账本$/, { tap: true }), "账本");
+        await open("more", () => clickBtn(page, /^更多$/, { tap: true }), "更多");
+        await open("board", viaMore("公告栏"), "公告栏");
+        await open("ledger", viaMore("账本"), "账本");
+        await open("memories", viaMore("记忆"));
+        await open("help", viaMore("帮助"), "帮助");
         await open("postcards", () => page.locator('[data-coach="postcard"]').tap(), "明信片");
       } else {
         await open("imprints", () => page.keyboard.press("r"));
         await open("board", () => page.keyboard.press("b"), "公告栏");
         await open("ledger", () => page.keyboard.press("l"), "账本");
         await open("postcards", () => page.keyboard.press("p"), "明信片");
-        await open("keys", () => page.keyboard.press("?"), "按键说明");
+        // the key list lives in 帮助 (how to play, then every key)
+        await open("help", () => page.keyboard.press("?"), "帮助");
       }
       const p = (await t.state()).player;
       if (p.pendingMoments.length > 0) await open("fork", () => (tap ? page.locator('[data-coach="decisions"]').tap() : page.locator('[data-coach="decisions"]').click()));
