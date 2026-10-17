@@ -7,16 +7,17 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { AgentView, BoardView, GuessView, LedgerDayView, PlayerView, PrincipleView, ProgressionView } from "@/lib/types";
-import { Btn, Portrait, PrincipleTablet } from "./common";
+import { Btn, GLYPH_DOWN, PendingNote, PixelGlyph, Portrait, PrincipleTablet } from "./common";
 import { ErrorLine, ModalFrame } from "./Modals";
 import { fmtClock, fmtSpan } from "./time";
+import g from "./game.module.css";
 import p from "./progress.module.css";
 
 // ───────────────────────────── title & epithets (Agent card) ─────────────────────────────
 
 export function TitleProgress({ progression, compact = false }: { progression: ProgressionView; compact?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
-  if (compact) return null; // phones: the title is already in the card's subtitle; epithets live in the 烙印 drawer
+  if (compact) return null;
   const pct = progression.nextAt ? Math.max(0, Math.min(100, Math.round((progression.reputation / progression.nextAt) * 100))) : 100;
   return (
     <div className={p.titleRow}>
@@ -65,6 +66,14 @@ export function PrinciplesPanel({
 }) {
   const [picking, setPicking] = useState<number | null>(null);
   const [confirmBuy, setConfirmBuy] = useState(false);
+  const [waking, setWaking] = useState<number | null>(null);
+  useEffect(() => {
+    if (!busy) setWaking(null);
+  }, [busy]);
+  const wake = (id: number, sleepId: number | null) => {
+    setWaking(id);
+    onWake(id, sleepId);
+  };
   const shaped = (x: PrincipleView) => x.source === "llm" || x.source === "fallback" || x.source === "note" || x.source === "revised";
   const active = useMemo(() => player.principles.filter((x) => !x.dormant).sort((a, b) => b.weight - a.weight), [player.principles]);
   const dormant = useMemo(() => player.principles.filter((x) => x.dormant && shaped(x)), [player.principles]);
@@ -80,6 +89,11 @@ export function PrinciplesPanel({
   if (player.principles.length === 0) return <p className={p.empty}>还没有烙印。回应它的岔路，它会记住。</p>;
   return (
     <div className={p.panel}>
+      {/* phones: the agent card has no room for the title and epithets, so they start the 烙印 page */}
+      <div className={p.phoneOnly}>
+        <TitleProgress progression={player.progression} />
+      </div>
+      <PendingNote busy={busy} label="已收到。它在整理记忆…" />
       <div className={p.slotHead}>
         <span className={p.slotLabel}>记忆</span>
         <span className={p.slots} aria-label={`记忆 ${slots.used}/${slots.total}`}>
@@ -136,16 +150,16 @@ export function PrinciplesPanel({
                   {active
                     .filter(shaped)
                     .map((o) => (
-                      <Btn key={o.id} size="sm" busy={busy} onClick={() => onWake(x.id, o.id)}>
+                      <Btn key={o.id} size="sm" busy={busy && waking === x.id} disabled={busy} onClick={() => wake(x.id, o.id)}>
                         『{o.text}』
                       </Btn>
                     ))}
-                  <Btn size="sm" variant="ghost" onClick={() => setPicking(null)}>
+                  <Btn size="sm" variant="ghost" disabled={busy} onClick={() => setPicking(null)}>
                     算了
                   </Btn>
                 </div>
               ) : (
-                <Btn size="sm" busy={busy} onClick={() => (full ? setPicking(x.id) : onWake(x.id, null))}>
+                <Btn size="sm" busy={busy && waking === x.id} disabled={busy} onClick={() => (full ? setPicking(x.id) : wake(x.id, null))}>
                   唤醒
                 </Btn>
               )}
@@ -167,9 +181,9 @@ export function PrinciplesPanel({
 
 // ───────────────────────────── 公告栏 ─────────────────────────────
 
-export function BoardModal({ board, meId, tz, onClose }: { board: BoardView; meId: string | null; tz: string; onClose: () => void }) {
+export function BoardModal({ board, meId, tz, onClose, onBack }: { board: BoardView; meId: string | null; tz: string; onClose: () => void; onBack?: () => void }) {
   return (
-    <ModalFrame title="公告栏" eyebrow={`城邦第 ${board.week} 周 · 本周履约榜`} onClose={onClose} wide tone="paper">
+    <ModalFrame title="公告栏" eyebrow={`城邦第 ${board.week} 周 · 本周履约榜`} onClose={onClose} onBack={onBack} wide tone="paper">
       <table className={p.table}>
         <thead>
           <tr>
@@ -226,13 +240,13 @@ const GROUPS: Array<{ kind: LedgerDayView["lines"][number]["kind"]; label: strin
   { kind: "burn", label: "销毁" }
 ];
 
-export function LedgerModal({ ledger, today, onClose }: { ledger: LedgerDayView[]; today: number; onClose: () => void }) {
+export function LedgerModal({ ledger, today, onClose, onBack }: { ledger: LedgerDayView[]; today: number; onClose: () => void; onBack?: () => void }) {
   const [sel, setSel] = useState(0);
   const day = ledger[sel];
   const tabLabel = (d: LedgerDayView) => (d.dayIndex === today ? "今天" : d.dayIndex === today - 1 ? "昨天" : `第 ${d.dayIndex + 1} 天`);
   const sign = (n: number) => (n > 0 ? `+${n}` : `${n}`);
   return (
-    <ModalFrame title="账本" eyebrow="日结 · 它这几天的进出" onClose={onClose} wide>
+    <ModalFrame title="账本" eyebrow="日结 · 它这几天的进出" onClose={onClose} onBack={onBack} wide>
       {ledger.length === 0 || !day ? (
         <p className={p.empty}>还没有账。</p>
       ) : (
@@ -321,10 +335,12 @@ export function SurveyCard({ volume, name, busy, error, onSubmit, onLater }: { v
             placeholder={["比如：倔", "比如：念旧", "比如：心软"][i]}
             onChange={(e) => setWords((cur) => cur.map((x, j) => (j === i ? e.target.value : x)))}
             aria-label={`第 ${i + 1} 个词`}
+            disabled={busy}
           />
         ))}
       </div>
       <ErrorLine error={error} />
+      <PendingNote busy={busy} label="已收到。正在记下你的三个词…" />
       <div className={p.btnRow}>
         <Btn type="submit" size="sm" variant="primary" busy={busy} disabled={!ready}>
           记下来
@@ -359,6 +375,10 @@ export function GuessCard({
 }) {
   const left = guess.dueMs > simNow ? fmtSpan(guess.dueMs - simNow) : "";
   const guessed = guess.options.find((o) => o.id === guess.guessed);
+  const [picked, setPicked] = useState<string | null>(null);
+  useEffect(() => {
+    if (!busy) setPicked(null);
+  }, [busy]);
   return (
     <section className={`${p.card} ${p.guess}`} aria-label="默契：猜它会怎么做">
       <header className={p.guessHead}>
@@ -367,8 +387,8 @@ export function GuessCard({
           {speaker?.name ?? guess.npc} 来找 {me.name} 商量：{guess.origin}。它说心里有数——
           {guessed ? "" : "你猜它会怎么做？"}
         </p>
-        <button type="button" className={p.collapse} onClick={onCollapse} aria-label="收起">
-          ▾
+        <button type="button" className={p.collapse} onClick={onCollapse} aria-label="先收起来，稍后再猜" title="先收起来，稍后再猜">
+          <PixelGlyph rows={GLYPH_DOWN} scale={2} />
         </button>
       </header>
       {guessed ? (
@@ -378,12 +398,22 @@ export function GuessCard({
       ) : (
         <div className={p.btnRow}>
           {guess.options.map((o) => (
-            <Btn key={o.id} size="sm" busy={busy} onClick={() => onGuess(o.id)}>
+            <Btn
+              key={o.id}
+              size="sm"
+              busy={busy && picked === o.id}
+              disabled={busy}
+              onClick={() => {
+                setPicked(o.id);
+                onGuess(o.id);
+              }}
+            >
               {o.label}
             </Btn>
           ))}
         </div>
       )}
+      <PendingNote busy={busy} label="已收到。正在记下你的猜测…" />
       <p className={p.hint}>
         {guessed ? "猜中会记进「默契」。" : `它会在 ${left || "稍后"} 内按自己的烙印拿主意；不猜也没关系。`}
       </p>
@@ -456,45 +486,74 @@ export function NewSaveModal({ hasSave, busy, error, onConfirm, onClose }: { has
   );
 }
 
+function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} className={`${g.switch} ${on ? g.switchOn : ""}`} onClick={() => onChange(!on)}>
+      <span>{on ? "开" : "关"}</span>
+    </button>
+  );
+}
+
+function VolumeRow({ title, on, vol, onOn, onVol }: { title: string; on: boolean; vol: number; onOn: (v: boolean) => void; onVol: (v: number) => void }) {
+  return (
+    <div className={g.volRow}>
+      <span className={g.volTitle}>{title}</span>
+      <Switch on={on} onChange={onOn} label={`${title}开关`} />
+      <input type="range" className={g.range} min={0} max={10} step={1} value={Math.round(vol * 10)} disabled={!on} onChange={(e) => onVol(Number(e.target.value) / 10)} aria-label={`${title}音量`} />
+    </div>
+  );
+}
+
+/** 设置: sound, motion, and (in game) a way to see the first-run tips again. The same dialog on the title screen and in
+ *  the town; every choice is saved on this device straight away. */
 export function SettingsModal({
   music,
   sfx,
   musicVol,
   sfxVol,
   reduceMotion,
+  soundLocked = false,
   onAudio,
   onReduceMotion,
+  onReplayTips,
   onNewSave,
-  onClose
+  onClose,
+  onBack
 }: {
   music: boolean;
   sfx: boolean;
   musicVol: number;
   sfxVol: number;
   reduceMotion: boolean;
+  /** the browser still blocks sound until the first click */
+  soundLocked?: boolean;
   onAudio: (patch: { music?: boolean; sfx?: boolean; musicVol?: number; sfxVol?: number }) => void;
   onReduceMotion: (v: boolean) => void;
+  onReplayTips?: () => void;
   onNewSave?: () => void;
   onClose: () => void;
+  onBack?: () => void;
 }) {
   return (
-    <ModalFrame title="设置" onClose={onClose}>
+    <ModalFrame title="设置" eyebrow="改动立刻生效，记在这台设备上" onClose={onClose} onBack={onBack}>
       <div className={p.settings}>
-        <label className={p.setRow}>
-          <input type="checkbox" checked={music} onChange={(e) => onAudio({ music: e.target.checked })} />
-          <span>音乐</span>
-          <input type="range" min={0} max={1} step={0.05} value={musicVol} disabled={!music} onChange={(e) => onAudio({ musicVol: Number(e.target.value) })} aria-label="音乐音量" />
-        </label>
-        <label className={p.setRow}>
-          <input type="checkbox" checked={sfx} onChange={(e) => onAudio({ sfx: e.target.checked })} />
-          <span>音效</span>
-          <input type="range" min={0} max={1} step={0.05} value={sfxVol} disabled={!sfx} onChange={(e) => onAudio({ sfxVol: Number(e.target.value) })} aria-label="音效音量" />
-        </label>
-        <label className={p.setRow}>
-          <input type="checkbox" checked={reduceMotion} onChange={(e) => onReduceMotion(e.target.checked)} />
-          <span>减少动态效果</span>
-          <small>关闭弹出、闪烁等动画</small>
-        </label>
+        <VolumeRow title="音乐" on={music} vol={musicVol} onOn={(v) => onAudio({ music: v })} onVol={(v) => onAudio({ musicVol: v })} />
+        <VolumeRow title="音效" on={sfx} vol={sfxVol} onOn={(v) => onAudio({ sfx: v })} onVol={(v) => onAudio({ sfxVol: v })} />
+        {soundLocked && (music || sfx) ? <p className={p.hint}>浏览器要先收到一次点击，才允许出声。</p> : null}
+        <div className={p.motionRow}>
+          <Switch on={reduceMotion} onChange={onReduceMotion} label="减少动态效果" />
+          <span className={p.motionText}>
+            <b>减少动态效果</b>
+            <small>关掉弹出、闪烁等动画</small>
+          </span>
+        </div>
+        {onReplayTips ? (
+          <div className={p.setRowBtn}>
+            <Btn size="sm" onClick={onReplayTips}>
+              再看一遍新手提示
+            </Btn>
+          </div>
+        ) : null}
         {onNewSave ? (
           <div className={p.setDanger}>
             <Btn size="sm" variant="danger" onClick={onNewSave}>
@@ -502,7 +561,6 @@ export function SettingsModal({
             </Btn>
           </div>
         ) : null}
-        <p className={p.hint}>设置保存在这台设备的浏览器里。</p>
       </div>
     </ModalFrame>
   );

@@ -8,26 +8,41 @@ import styles from "./hud.module.css";
 
 // ───────────────────────────── guardian dock (bottom-centre) ─────────────────────────────
 
+/** The guardian's verbs, always in reach. Each lives here and only here (the rail and the 更多 sheet hold the lookups):
+ *  岔路 (answer it) · 留言 (say something) · 明信片 (read tonight's) · 烙印 (what it remembers of you) · [phone: 更多]. */
 export function Dock({
   pending,
   noteLeft,
   unread,
+  principlesOn,
+  postcardsOn,
   onDecisions,
   onNote,
   onPostcards,
-  onPrinciples
+  onPrinciples,
+  more
 }: {
   pending: number;
   noteLeft: number;
   unread: number;
+  principlesOn: boolean;
+  postcardsOn: boolean;
   onDecisions: () => void;
   onNote: () => void;
   onPostcards: () => void;
   onPrinciples: () => void;
+  /** phones only: the one button that holds everything the desktop rail and top-right buttons hold */
+  more?: { open: boolean; onClick: () => void };
 }) {
   return (
     <nav className={`${styles.bar} ${styles.dock}`} aria-label="守护灵">
-      <button type="button" className={`${styles.dockBtn} ${pending > 0 ? styles.dockPulse : ""}`} onClick={onDecisions} data-coach="decisions" title="岔路">
+      <button
+        type="button"
+        className={`${styles.dockBtn} ${pending > 0 ? styles.dockPulse : styles.dockIdle}`}
+        onClick={onDecisions}
+        data-coach="decisions"
+        title={pending > 0 ? `有 ${pending} 件事等你回应` : "现在没有要回应的事"}
+      >
         <Icon name="help" size={32} />
         <span className={styles.dockLabel}>岔路</span>
         {pending > 0 ? <span className={styles.badge}>{pending}</span> : null}
@@ -38,17 +53,30 @@ export function Dock({
         <span className={styles.dockKey} aria-hidden>N</span>
         <span className={`${styles.badge} ${styles.badgeSoft}`}>{noteLeft}/3</span>
       </button>
-      <button type="button" className={`${styles.dockBtn} ${unread > 0 ? styles.dockPulse : ""}`} onClick={onPostcards} data-coach="postcard" title="明信片（P）">
+      <button
+        type="button"
+        className={`${styles.dockBtn} ${postcardsOn ? styles.dockOn : ""} ${unread > 0 ? styles.dockPulse : ""}`}
+        onClick={onPostcards}
+        aria-pressed={postcardsOn}
+        data-coach="postcard"
+        title="明信片（P）"
+      >
         <Icon name="ticket" size={32} />
         <span className={styles.dockLabel}>明信片</span>
         <span className={styles.dockKey} aria-hidden>P</span>
         {unread > 0 ? <span className={styles.badge}>{unread}</span> : null}
       </button>
-      <button type="button" className={styles.dockBtn} onClick={onPrinciples} title="烙印（R）">
+      <button type="button" className={`${styles.dockBtn} ${principlesOn ? styles.dockOn : ""}`} onClick={onPrinciples} aria-pressed={principlesOn} title="烙印（R）">
         <Icon name="thoughts" size={32} />
         <span className={styles.dockLabel}>烙印</span>
         <span className={styles.dockKey} aria-hidden>R</span>
       </button>
+      {more ? (
+        <button type="button" className={`${styles.dockBtn} ${more.open ? styles.dockOn : ""}`} onClick={more.onClick} aria-haspopup="dialog" aria-expanded={more.open} title="关系、记忆、公告栏、账本、帮助、设置">
+          <Icon name="crate" size={32} />
+          <span className={styles.dockLabel}>更多</span>
+        </button>
+      ) : null}
     </nav>
   );
 }
@@ -73,6 +101,7 @@ export function LocateButton({ following, onClick }: { following: boolean; onCli
 export function TestPanel({ busy, onAdvance }: { busy: boolean; onAdvance: GameActions["advance"] }) {
   const [open, setOpen] = useState(true);
   useEffect(() => {
+    // desktop: open (it is a QA bench and costs little room); phones: a small pill until tapped
     try {
       if (window.matchMedia("(max-width: 900px)").matches) setOpen(false);
     } catch {

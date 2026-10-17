@@ -66,7 +66,7 @@
 }
 .epithet {
   padding: 0 6px;
-  min-height: 22px;
+  min-height: 26px;
   border: 2px solid var(--ink-3);
   background: var(--paper-2);
   color: var(--ink);
@@ -216,8 +216,8 @@
 }
 .dayTab {
   flex: none;
-  min-height: 32px;
-  padding: 0 8px;
+  min-height: 40px;
+  padding: 0 10px;
   border: 2px solid var(--ink-3);
   background: var(--paper-2);
   color: var(--ink);
@@ -304,7 +304,7 @@
 .word {
   flex: 1;
   min-width: 0;
-  min-height: 36px;
+  min-height: 48px;
   padding: 0 8px;
   border: 8px solid transparent;
   border-image: var(--frame-input) 4 fill / 8px stretch;
@@ -326,12 +326,21 @@
 }
 .collapse {
   flex: none;
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: 2px solid var(--ink-3);
   background: var(--paper-2);
   color: var(--ink);
   cursor: pointer;
+}
+.collapse:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
 }
 .guessed {
   margin: 0;
@@ -343,7 +352,7 @@
   bottom: calc(var(--dock-h, 96px) + 12px);
   transform: translateX(-50%);
   z-index: 40;
-  min-height: 36px;
+  min-height: 40px;
   padding: 0 12px;
   border: 8px solid transparent;
   border-image: var(--btn-tile-on, var(--btn-tile)) 4 fill / 8px stretch;
@@ -404,4 +413,53 @@
 .setRow input[type="range"],
 .setRow input[type="checkbox"] {
   accent-color: var(--gold-dk);
+}
+
+/* ───────────── additions: phone-only block, settings rows, 40 px targets ───────────── */
+.phoneOnly {
+  display: none;
+}
+@media (max-width: 900px) {
+  .phoneOnly {
+    display: block;
+  }
+}
+.motionRow {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.motionText {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  line-height: 18px;
+}
+.motionText b {
+  font-weight: 400;
+  text-shadow: 1px 0 0 currentColor;
+}
+.motionText small {
+  color: var(--ink-3);
+}
+.setRowBtn {
+  display: flex;
+}
+.settings .hint {
+  margin: 0;
+}
+
+@media (pointer: coarse) {
+  .epithet {
+    min-height: 40px;
+    padding: 0 10px;
+  }
+}
+.dayTab:focus-visible,
+.word:focus {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
 }

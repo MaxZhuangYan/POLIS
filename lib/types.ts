@@ -170,6 +170,8 @@ export interface RelationshipView {
   lastEvent: string | null;
 }
 
+export type MemoryTag = "你的话" | "它认同" | "它没认同" | "被迫" | "它做了" | "后来" | "别人";
+
 export interface MemoryView {
   id: number;
   atMs: number;
@@ -179,8 +181,6 @@ export interface MemoryView {
   /** whose memory this is about: 你的话 (what the guardian said) · 它认同 · 它没认同 · 被迫 · 它做了 · 后来 (what came of it) · 别人 */
   tag?: MemoryTag;
 }
-
-export type MemoryTag = "你的话" | "它认同" | "它没认同" | "被迫" | "它做了" | "后来" | "别人";
 
 export interface PlayerView {
   agent: AgentView;

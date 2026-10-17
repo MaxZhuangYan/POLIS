@@ -2,16 +2,23 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { AgentView, JudgmentView, MomentView, NoteView, PostcardView, PrincipleView, WaveringView } from "@/lib/types";
-import { Btn, CloseGlyph, DomainTag, Figure, Icon, Portrait, PrincipleTablet, Spinner, TabletPlaceholder, useFocusTrap } from "./common";
+import { Btn, CloseGlyph, DomainTag, Figure, GLYPH_LEFT, Icon, PendingNote, PixelGlyph, Portrait, PrincipleTablet, Spinner, TabletPlaceholder, useDialogLayer } from "./common";
 import { fmtClock, fmtCountdown } from "./time";
 import m from "./modals.module.css";
 
 // ───────────────────────────── frame ─────────────────────────────
 
+/**
+ * Every dialog in the game is one of these, so they all behave the same (see useDialogLayer in common.tsx):
+ * × / Esc / a click on the dimmed backdrop all call `onClose`; `onBack` adds a "‹" that steps back to where the player
+ * came from; with no `onClose` the dialog is a step the player has to take (arrival, first forks, the imprint reveal) and
+ * none of those dismiss it. Focus moves in, stays in, and returns on close.
+ */
 export function ModalFrame({
   title,
   eyebrow,
   onClose,
+  onBack,
   children,
   footer,
   wide = false,
@@ -21,6 +28,7 @@ export function ModalFrame({
   title: string;
   eyebrow?: ReactNode;
   onClose?: () => void;
+  onBack?: () => void;
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
@@ -28,16 +36,23 @@ export function ModalFrame({
   /** set the title in the logo's pixel lettering (the arrival dialog) */
   logo?: boolean;
 }) {
-  const trap = useFocusTrap(true);
+  const ref = useRef<HTMLDivElement>(null);
+  const top = useDialogLayer(ref, onClose);
   return (
     <div
       className={m.backdrop}
+      inert={!top}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && onClose) onClose();
+        if (top && e.target === e.currentTarget && onClose) onClose();
       }}
     >
-      <div ref={trap} className={`${m.modal} ${wide ? m.wide : ""} ${tone === "gold" ? m.toneGold : ""}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}>
+      <div ref={ref} className={`${m.modal} ${wide ? m.wide : ""} ${tone === "gold" ? m.toneGold : ""}`} role="dialog" aria-modal={top ? true : undefined} aria-label={title} tabIndex={-1}>
         <header className={m.head}>
+          {onBack ? (
+            <button type="button" className={m.close} onClick={onBack} aria-label="返回">
+              <PixelGlyph rows={GLYPH_LEFT} scale={2} />
+            </button>
+          ) : null}
           <div className={m.headText}>
             {eyebrow ? <div className={m.eyebrow}>{eyebrow}</div> : null}
             <h2 className={`${m.title} ${logo ? m.titleLogo : ""}`}>{title}</h2>
@@ -52,6 +67,21 @@ export function ModalFrame({
         {footer ? <footer className={m.foot}>{footer}</footer> : null}
       </div>
     </div>
+  );
+}
+
+/** the first-run path, shown in the eyebrow of its three dialogs: 起名 · 三件事 · 烙印 */
+export function FirstRunSteps({ at }: { at: 1 | 2 | 3 }) {
+  const steps = ["起名", "三件事", "它记住了什么"];
+  return (
+    <ol className={m.steps} aria-label={`第 ${at} 步，共 3 步`}>
+      {steps.map((s, i) => (
+        <li key={s} className={i + 1 === at ? m.stepOn : i + 1 < at ? m.stepDone : ""} aria-current={i + 1 === at ? "step" : undefined}>
+          <i aria-hidden>{i + 1}</i>
+          <span>{s}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -83,15 +113,15 @@ export function OnboardingModal({ busy, error, onCreate }: { busy: boolean; erro
     if (valid && !busy) onCreate({ name: name.trim(), sprite });
   };
   return (
-    <ModalFrame title="POLIS" eyebrow="欢迎来到一座小小的城邦" wide tone="gold" logo>
+    <ModalFrame title="POLIS" eyebrow={<FirstRunSteps at={1} />} wide tone="gold" logo>
       <form onSubmit={submit} className={m.onboard}>
         <p className={m.premise}>
-          你是 <b>守护灵</b>：没有身体，只能在它拿不定主意的时候，低语一句。
+          你是 <b>守护灵</b>：没有身体，只在它拿不定主意时低语一句。
           <br />
-          它会记住你，但它有自己的立场。
+          它会记住你，但有自己的立场。
         </p>
         <label className={m.field}>
-          <span>给它起个名字</span>
+          <span>给你守护的它起个名字</span>
           <input
             data-autofocus=""
             className={m.input}
@@ -118,9 +148,11 @@ export function OnboardingModal({ busy, error, onCreate }: { busy: boolean; erro
           ))}
         </fieldset>
         <ErrorLine error={error} />
+        <PendingNote busy={busy} label="已收到。它正从城门走进来…" />
         <Btn type="submit" variant="primary" full busy={busy} disabled={!valid} sfx="confirm">
           让它入城
         </Btn>
+        <p className={m.hint}>{valid ? "入城后，有三件小事等你说一句话。" : "先给它一个名字。"}</p>
       </form>
     </ModalFrame>
   );
@@ -158,12 +190,13 @@ export function ForkModal({
     if (!busy) setPicked(null);
   }, [busy, moment.id]);
   const left = moment.expiresAtMs - simNow;
+  const pickedLabel = moment.options.find((o) => o.id === picked)?.label ?? null;
   return (
     <ModalFrame
       title={step ? `第 ${step.index}/${step.total} 件事` : `岔路 · ${MOMENT_THEME[moment.type]}`}
       eyebrow={
         step ? (
-          "它第一次入城。拿不定主意时，它会低声问你。"
+          <FirstRunSteps at={2} />
         ) : moment.templateId.startsWith("DLM_") && speaker ? (
           <>
             <DomainTag domain={moment.type} /> <span className={m.dilemmaTag}>{speaker.name} 的难处</span>
@@ -202,7 +235,8 @@ export function ForkModal({
           </figcaption>
         </figure>
       </div>
-      <p className={m.prompt}>{moment.promptText}</p>
+      <p className={m.promptBy}>{me.name} 低声问你：</p>
+      <p className={`${m.prompt} ${m.promptTight}`}>{moment.promptText}</p>
       {moment.facts.length > 0 ? (
         <section className={m.facts} aria-label="可核查的记录">
           <h3>可核查的记录</h3>
@@ -240,17 +274,22 @@ export function ForkModal({
         ))}
       </div>
       <ErrorLine error={error} />
-      <p className={m.fine}>
-        24 小时内不回应，它会按自己的原则决定（剩 {fmtCountdown(left)}）
-        {onLater ? (
-          <>
-            {"　"}
-            <button type="button" className={m.link} onClick={onLater}>
-              稍后再说（Esc）
-            </button>
-          </>
-        ) : null}
-      </p>
+      <PendingNote busy={busy} label={`已收到${pickedLabel ? `「${pickedLabel}」` : ""}。${step ? "它在把这句话记下来…" : "它在想怎么回应你…"}`} />
+      {step ? (
+        <p className={m.fine}>没有标准答案。你选的，会成为它的一条烙印。</p>
+      ) : (
+        <p className={m.fine}>
+          24 小时内不回应，它会按自己的原则决定（剩 {fmtCountdown(left)}）
+          {onLater ? (
+            <>
+              {"　"}
+              <button type="button" className={m.link} onClick={onLater} disabled={busy}>
+                稍后再说（Esc）
+              </button>
+            </>
+          ) : null}
+        </p>
+      )}
     </ModalFrame>
   );
 }
@@ -287,22 +326,25 @@ export function ImprintModal({
   const forming = distilling > 0 && !waitedLong;
   const ready = allShown && !forming;
   return (
-    <ModalFrame title={`${sorted.length} 条原则已写入记忆`} eyebrow="你的三次低语，成了它的烙印" wide tone="gold">
+    <ModalFrame title={`它记住了 ${sorted.length + Math.max(0, distilling)} 句话`} eyebrow={<FirstRunSteps at={3} />} wide tone="gold">
+      <p className={m.hint}>你的每个回答，都成了它的一条烙印。以后它做决定，会想起这些话。</p>
       <div className={m.tablets}>
         {sorted.slice(0, shown).map((p) => (
-          <PrincipleTablet key={p.id} p={p} appear />
+          <PrincipleTablet key={p.id} p={p} appear reveal />
         ))}
         {allShown ? Array.from({ length: Math.max(0, distilling) }, (_, i) => <TabletPlaceholder key={`ph${i}`} n={i} />) : null}
       </div>
       {distilling > 0 ? (
         <p className={m.fine} role="status">
-          记忆形成中…
+          <Spinner size={14} /> 还有 {distilling} 句正在写进记忆…
         </p>
       ) : null}
       <ErrorLine error={error} />
+      <PendingNote busy={busy} label="已收到。它正在出发…" />
       <Btn variant="primary" full busy={busy} disabled={!ready} onClick={onAck} autoFocus sfx="confirm">
         看它出发
       </Btn>
+      <p className={m.fine}>它会照这些话去做第一批真实的活；之后随时点底部的「烙印」回看。</p>
     </ModalFrame>
   );
 }
@@ -376,6 +418,7 @@ export function JudgmentModal({
       ) : null}
       {j.source === "rules" ? <span className={m.sourceTag}>规则判定</span> : null}
       <ErrorLine error={error} />
+      <PendingNote busy={busy} label={which === "force" ? "已收到。它在照你说的去办…" : "已收到。它在记下这一次…"} />
       <div className={m.actions}>
         {j.decision === "refuse" ? (
           <>
@@ -459,6 +502,7 @@ export function WaveringModal({
         </label>
       ) : null}
       <ErrorLine error={error} />
+      <PendingNote busy={busy} label={which === "revise" ? "已收到。它在改写这条原则…" : "已收到。它在想你说的话…"} />
       <div className={m.actions}>
         {!revising ? (
           <>
@@ -505,12 +549,17 @@ export function WaveringModal({
 
 // ───────────────────────────── notes (留言) ─────────────────────────────
 
+const NOTE_IDEAS = ["今天辛苦了", "别为了赶工，把答应过的事丢了", "多和 Mira 走动走动"];
+
 export function NoteModal({
   left,
   items,
   tz,
   busy,
   error,
+  draft,
+  onDraft,
+  replyAt,
   onSend,
   onClose
 }: {
@@ -519,10 +568,17 @@ export function NoteModal({
   tz: string;
   busy: boolean;
   error: string | null;
+  /** the unsent text is kept by the caller, so closing the dialog never loses it */
+  draft: string;
+  onDraft: (text: string) => void;
+  /** "23:00": when the next postcard (where the reply goes) is due */
+  replyAt: string;
   onSend: (text: string) => Promise<boolean>;
   onClose: () => void;
 }) {
-  const [text, setText] = useState("");
+  const text = draft;
+  const setText = onDraft;
+  const [sent, setSent] = useState<string | null>(null);
   const len = Array.from(text).length;
   const list = useMemo(() => [...items].sort((a, b) => b.createdAtMs - a.createdAtMs || b.id - a.id), [items]);
   const can = left > 0 && text.trim().length > 0 && len <= 50;
@@ -530,7 +586,10 @@ export function NoteModal({
     e.preventDefault();
     if (!can || busy) return;
     const ok = await onSend(text.trim());
-    if (ok) setText("");
+    if (ok) {
+      setText("");
+      setSent(text.trim());
+    }
   };
   return (
     <ModalFrame title="留言" eyebrow={`今日剩余 ${left}/3`} onClose={onClose} wide>
@@ -543,14 +602,32 @@ export function NoteModal({
             value={text}
             maxLength={50}
             rows={3}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={left > 0 ? "比如：别为了赶工，把答应过的事丢了。" : "今天的留言用完了，明天再来。"}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (sent) setSent(null);
+            }}
+            placeholder={left > 0 ? "想对它说什么都行，它会放在心上。" : "今天的留言用完了，明天再来。"}
             disabled={busy || left <= 0}
           />
           <small className={m.counter}>{len}/50</small>
         </label>
-        <p className={m.hint}>它不会秒回。它会在自己的时间——下一张明信片里——回应你。</p>
+        {left > 0 && text.length === 0 ? (
+          <div className={m.ideas} role="group" aria-label="不知道说什么？点一句">
+            {NOTE_IDEAS.map((t) => (
+              <button key={t} type="button" className={m.idea} disabled={busy} onClick={() => setText(t)}>
+                {t}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <p className={m.hint}>它不会秒回。它会在{replyAt}的明信片里回应你。</p>
         <ErrorLine error={error} />
+        <PendingNote busy={busy} label="已收到。正在放进它的信箱…" />
+        {sent && !busy ? (
+          <p className={m.okLine} role="status">
+            已送出：「{sent}」。它会在{replyAt}的明信片里回应你。
+          </p>
+        ) : null}
         <Btn type="submit" variant="primary" full busy={busy} disabled={!can} sfx="confirm">
           留下这句话
         </Btn>
@@ -610,6 +687,7 @@ export function PostcardModal({
   initialId,
   onRead,
   onClose,
+  onBack,
   onLedger
 }: {
   items: PostcardView[];
@@ -618,6 +696,7 @@ export function PostcardModal({
   initialId: number | null;
   onRead: (id: number) => void;
   onClose: () => void;
+  onBack?: () => void;
   /** a way to the numbers — which never appear on the card itself */
   onLedger?: () => void;
 }) {
@@ -646,6 +725,7 @@ export function PostcardModal({
         </>
       }
       onClose={onClose}
+      onBack={onBack}
       wide
       tone="paper"
     >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import type { Domain, PrincipleView } from "@/lib/types";
 import { CHARACTERS, SPRITE_KEYS, facePath, normalizeSprite } from "../town/characters";
 import styles from "./hud.module.css";
@@ -120,6 +120,20 @@ export const GLYPH_SOUND_ON = ["....X......", "...XX...X..", "XXXXX....X.", "XXX
 export const GLYPH_SOUND_OFF = ["....X......", "...XX......", "XXXXX.X...X", "XXXXX..X.X.", "XXXXX...X..", "XXXXX..X.X.", "XXXXX.X...X", "...XX......", "....X......"];
 export const GLYPH_DOWN = ["XXXXXXX", ".XXXXX.", "..XXX..", "...X..."];
 export const GLYPH_RIGHT = ["X...", "XX..", "XXX.", "XXXX", "XXX.", "XX..", "X..."];
+export const GLYPH_LEFT = ["...X", "..XX", ".XXX", "XXXX", ".XXX", "..XX", "...X"];
+/** a small gear: 设置 */
+export const GLYPH_GEAR = [
+  "....XX....",
+  ".X..XX..X.",
+  ".XXXXXXXX.",
+  "..XX..XX..",
+  "XXX....XXX",
+  "XXX....XXX",
+  "..XX..XX..",
+  ".XXXXXXXX.",
+  ".X..XX..X.",
+  "....XX...."
+];
 
 export function CloseGlyph({ scale = 2 }: { scale?: number }) {
   return <PixelGlyph rows={GLYPH_X} scale={scale} />;
@@ -172,9 +186,20 @@ const SOURCE_LABEL: Record<PrincipleView["source"], string> = {
   note: "来自你的留言"
 };
 
-export function PrincipleTablet({ p, delayMs, appear = false }: { p: PrincipleView; delayMs?: number; appear?: boolean }) {
+/** "入域第一天，Mira 在市集邀我合作 —— 你选了「接受合作」" -> the scene and the choice (the server writes this shape) */
+export function splitOrigin(origin: string): { scene: string; choice: string | null } {
+  const i = origin.lastIndexOf(" —— ");
+  if (i < 0) return { scene: origin, choice: null };
+  const tail = origin.slice(i + 4).trim();
+  const m = /^你选了(「.+」)$/.exec(tail);
+  return { scene: origin.slice(0, i).trim(), choice: m ? m[1] : null };
+}
+
+export function PrincipleTablet({ p, delayMs, appear = false, reveal = false }: { p: PrincipleView; delayMs?: number; appear?: boolean; reveal?: boolean }) {
   const m = DOMAIN_META[p.domain];
   const weight = Math.max(0, Math.min(1, p.weight));
+  const { scene, choice } = splitOrigin(p.origin);
+  const showChoice = reveal && !!choice;
   return (
     <article
       className={`${styles.tablet} ${p.dormant ? styles.tabletDormant : ""} ${appear ? styles.tabletAppear : ""}`}
@@ -185,6 +210,13 @@ export function PrincipleTablet({ p, delayMs, appear = false }: { p: PrincipleVi
         {p.dormant ? <span className={styles.dormantNote}>沉睡中</span> : null}
         <span className={styles.tabletSource}>{SOURCE_LABEL[p.source]}</span>
       </header>
+      {showChoice ? (
+        <p className={styles.tabletChoice}>
+          <span>你选了</span>
+          <b>{choice}</b>
+          <span>，它记成了：</span>
+        </p>
+      ) : null}
       <p className={styles.tabletText}>『{p.text}』</p>
       <div className={styles.weightRow} title={`权重 ${weight.toFixed(2)}`}>
         <span>分量</span>
@@ -193,7 +225,7 @@ export function PrincipleTablet({ p, delayMs, appear = false }: { p: PrincipleVi
         </span>
         <span className={styles.cited}>被引用 {p.citedCount} 次</span>
       </div>
-      {p.origin ? <p className={styles.tabletOrigin}>{p.origin}</p> : null}
+      {p.origin ? <p className={styles.tabletOrigin}>{showChoice ? scene : p.origin}</p> : null}
     </article>
   );
 }
@@ -206,25 +238,116 @@ export function TabletPlaceholder({ n }: { n: number }) {
   );
 }
 
-// ───────────────────────────── focus handling ─────────────────────────────
+// ───────────────────────────── dialog layers & focus ─────────────────────────────
+//
+// One model for every dialog (fork, judgment, note, postcards, board, ledger, settings, help, welcome-back ...):
+//   * dialogs stack in the order they opened; only the TOP one is active, the ones below are `inert` (no focus, no clicks);
+//   * the top dialog moves focus inside when it opens, keeps Tab inside it, and gives focus back to where it was on close;
+//   * Esc always belongs to the top dialog (it closes it, or does nothing if the dialog cannot be dismissed) and never leaks
+//     to whatever sits behind it (a drawer, the inspector);
+//   * clicking the dimmed backdrop = the close button (ModalFrame).
 
 const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-/** "focus-trap lite": focus moves into the dialog, Tab wraps inside it, focus returns on close */
-export function useFocusTrap(active: boolean): RefObject<HTMLDivElement | null> {
-  const ref = useRef<HTMLDivElement | null>(null);
+const layerStack: string[] = [];
+const layerSubs = new Set<() => void>();
+const emitLayers = () => layerSubs.forEach((f) => f());
+const subscribeLayers = (f: () => void) => {
+  layerSubs.add(f);
+  return () => {
+    layerSubs.delete(f);
+  };
+};
+
+/** where focus should go back to when a dialog is replaced by another one in the same commit */
+let carriedFocus: HTMLElement | null = null;
+
+const coarsePointer = (): boolean => {
+  try {
+    return window.matchMedia("(pointer: coarse)").matches;
+  } catch {
+    return false;
+  }
+};
+
+function rememberOpener(): HTMLElement | null {
+  const carried = carriedFocus && document.contains(carriedFocus) ? carriedFocus : null;
+  carriedFocus = null;
+  return carried ?? (document.activeElement as HTMLElement | null);
+}
+
+function restoreOpener(prev: HTMLElement | null): void {
+  if (!prev || prev === document.body || !document.contains(prev)) return;
+  prev.focus({ preventScroll: true });
+  if (document.activeElement !== prev) {
+    // still inert (another dialog took over in this very commit): hand the opener on to it
+    carriedFocus = prev;
+    window.setTimeout(() => {
+      if (carriedFocus === prev) carriedFocus = null;
+    }, 80);
+  }
+}
+
+/**
+ * Register a dialog on the layer stack. Returns whether it is the top layer.
+ * `onEscape`: called on Esc while top (omit it for a dialog that cannot be dismissed: Esc is still swallowed).
+ */
+export function useDialogLayer(ref: RefObject<HTMLElement | null>, onEscape?: () => void): boolean {
+  const id = useId();
   useEffect(() => {
-    if (!active) return;
+    layerStack.push(id);
+    emitLayers();
+    return () => {
+      const i = layerStack.indexOf(id);
+      if (i >= 0) layerStack.splice(i, 1);
+      emitLayers();
+    };
+  }, [id]);
+  const top = useSyncExternalStore(
+    subscribeLayers,
+    () => layerStack[layerStack.length - 1] === id,
+    () => true
+  );
+  const escRef = useRef(onEscape);
+  useEffect(() => {
+    escRef.current = onEscape;
+  });
+
+  // focus goes back to the opener when the dialog goes away
+  useEffect(() => {
+    const prev = rememberOpener();
+    return () => restoreOpener(prev);
+  }, []);
+
+  // top: take focus, keep Tab inside, own Esc
+  useEffect(() => {
+    if (!top) return;
     const node = ref.current;
     if (!node) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const first = node.querySelector<HTMLElement>("[data-autofocus]") ?? node.querySelector<HTMLElement>(FOCUSABLE) ?? node;
-    window.setTimeout(() => first.focus({ preventScroll: true }), 30);
+    let h = 0;
+    if (!node.contains(document.activeElement)) {
+      h = window.setTimeout(() => {
+        const auto = node.querySelector<HTMLElement>("[data-autofocus]");
+        const textLike = auto && /^(INPUT|TEXTAREA)$/.test(auto.tagName);
+        // a phone must not open its soft keyboard on its own, and no answer may look pre-selected (a fork's first option):
+        // unless the dialog names a starting control, focus the dialog itself and let Tab walk in from the top
+        const first = auto && !(textLike && coarsePointer()) ? auto : node;
+        first.focus({ preventScroll: true });
+      }, 30);
+    }
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (e.isComposing) return;
+        e.stopPropagation();
+        e.preventDefault();
+        escRef.current?.();
+        return;
+      }
       if (e.key !== "Tab") return;
       const items = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.offsetParent !== null);
       if (items.length === 0) {
         e.preventDefault();
+        node.focus();
         return;
       }
       const a = items[0];
@@ -238,13 +361,47 @@ export function useFocusTrap(active: boolean): RefObject<HTMLDivElement | null> 
         a.focus();
       }
     };
-    node.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
-      node.removeEventListener("keydown", onKey);
-      if (previous && document.contains(previous)) previous.focus({ preventScroll: true });
+      window.clearTimeout(h);
+      window.removeEventListener("keydown", onKey, true);
     };
-  }, [active]);
-  return ref;
+  }, [top, ref]);
+  return top;
+}
+
+/** a non-modal panel (drawer, inspector, building card): focus moves in when it opens and returns when it closes. Esc is
+ *  GameShell's (it closes the topmost panel, but only when no dialog is open). */
+export function usePanelFocus(ref: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const prev = rememberOpener();
+    const node = ref.current;
+    const h = window.setTimeout(() => node?.focus({ preventScroll: true }), 30);
+    return () => {
+      window.clearTimeout(h);
+      restoreOpener(prev);
+    };
+  }, [ref]);
+}
+
+/** "已收到，它在想…": the line that shows while a request runs; says so honestly when the answer is slow */
+export function PendingNote({ busy, label, slowLabel = "还在想，不用重复点，答案会自己出现。", slowMs = 4000 }: { busy: boolean; label: string; slowLabel?: string; slowMs?: number }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!busy) {
+      setSlow(false);
+      return;
+    }
+    const h = window.setTimeout(() => setSlow(true), slowMs);
+    return () => window.clearTimeout(h);
+  }, [busy, slowMs]);
+  if (!busy) return null;
+  return (
+    <p className={styles.pending} role="status" aria-live="polite">
+      <Spinner size={14} />
+      <span>{slow ? slowLabel : label}</span>
+    </p>
+  );
 }
 
 // ───────────────────────────── buttons ─────────────────────────────

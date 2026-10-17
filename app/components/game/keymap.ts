@@ -5,10 +5,10 @@
 //            Q E  or  - =           zoom out / in by one step
 //            Space                  locate my Agent and follow it
 //   guardian 1 2 3                  choose that option of the open fork card
-//            N                      留言      P  明信片      R  烙印 drawer
+//            N                      留言      P  明信片      R  烙印 drawer      B  公告栏      L  账本
 //   screen   F                      toggle the town feed
-//            Esc                    close the top modal / drawer / popover
-//            ? or H                 this help
+//            Esc                    close the top dialog, else the drawer / card
+//            ? or H                 帮助 (how to play + this list)
 //
 // Keys are ignored while typing in an input / textarea, and with Ctrl / Cmd / Alt held (so browser shortcuts such as
 // Cmd+R keep working). Touch play is unchanged: drag to pan, pinch to zoom, tap.
@@ -47,8 +47,8 @@ export const KEY_HELP: KeyHelpGroup[] = [
     title: "界面",
     rows: [
       { keys: [["F"]], label: "小镇动态：展开 / 收起" },
-      { keys: [["Esc"]], label: "关闭最上面的窗口或抽屉" },
-      { keys: [["?"], ["H"]], label: "这张按键说明" }
+      { keys: [["Esc"]], label: "关闭最上面的窗口；没有窗口时关闭抽屉和卡片" },
+      { keys: [["?"], ["H"]], label: "帮助：玩法和这张按键表" }
     ]
   }
 ];

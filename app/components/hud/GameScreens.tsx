@@ -1,13 +1,12 @@
 "use client";
 
-// The "game shell" screens around the town: loading, title, the day card, the welcome-back card, the key help and the
-// sound popover. (The HUD itself is in TopHud / SidePanels / Overlays, the dialogs in Modals.)
+// The "game shell" screens around the town: loading, title, the day card, the welcome-back card, the help dialog and the
+// 更多 sheet. (The HUD itself is in TopHud / SidePanels / Overlays, the dialogs in Modals.)
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentView, FeedItem } from "@/lib/types";
-import type { AudioSettings, AudioStatus } from "../game/keys";
 import { KEY_HELP } from "../game/keymap";
-import { Btn, CloseGlyph, GLYPH_SOUND_OFF, GLYPH_SOUND_ON, Keycap, PixelGlyph, Portrait, SunMoon } from "./common";
+import { Btn, GLYPH_GEAR, GLYPH_SOUND_OFF, GLYPH_SOUND_ON, Icon, Keycap, PixelGlyph, Portrait, SunMoon } from "./common";
 import { ModalFrame } from "./Modals";
 import g from "./game.module.css";
 
@@ -44,6 +43,7 @@ export function TitleScreen({
   me,
   day,
   leaving,
+  blocked = false,
   soundOn,
   onToggleSound,
   onStart,
@@ -53,6 +53,8 @@ export function TitleScreen({
   me: AgentView | null;
   day: number;
   leaving: boolean;
+  /** a dialog (设置 / 制作名单 / 新的存档) is open above the title: nothing on the title can be reached until it closes */
+  blocked?: boolean;
   soundOn: boolean;
   onToggleSound: () => void;
   onStart: () => void;
@@ -60,11 +62,15 @@ export function TitleScreen({
   onMenu?: (item: "newsave" | "settings" | "credits") => void;
 }) {
   const startRef = useRef<HTMLButtonElement>(null);
+  const blockedRef = useRef(blocked);
+  useEffect(() => {
+    blockedRef.current = blocked;
+  }, [blocked]);
   useEffect(() => {
     startRef.current?.focus({ preventScroll: true });
     // Enter starts the game even when focus is elsewhere (a button that has focus handles Enter itself)
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Enter" || e.repeat || leaving) return;
+      if (e.key !== "Enter" || e.repeat || leaving || blockedRef.current) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "BUTTON" || t.tagName === "INPUT")) return;
       onStart();
@@ -73,7 +79,7 @@ export function TitleScreen({
     return () => window.removeEventListener("keydown", onKey);
   }, [leaving, onStart]);
   return (
-    <div className={`${g.title} ${leaving ? g.titleLeaving : ""}`} role="dialog" aria-label="Polis">
+    <div className={`${g.title} ${leaving ? g.titleLeaving : ""}`} role="dialog" aria-label="Polis" inert={blocked}>
       <div className={g.shade} aria-hidden />
       <div className={g.logoBox}>
         <h1 className={g.logo}>POLIS</h1>
@@ -162,37 +168,82 @@ export function DayCard({ day, night, onDone }: { day: number; night: boolean; o
 
 // ───────────────────────────── welcome back ─────────────────────────────
 
+export interface WelcomeSummary {
+  /** town events since the player last looked, and whether the feed was long enough to have lost the older ones */
+  events: number;
+  capped: boolean;
+  /** how many of them involve my Agent */
+  mine: number;
+  /** the headlines: the most important lines since then (mine first) */
+  headlines: FeedItem[];
+  /** times the Agent had to decide on its own because nobody answered (real feed rows) */
+  decidedAlone: number;
+}
+
+/** What changed while the player was away, in the order it matters, and one button that leads to the next thing worth doing. */
 export function WelcomeBackCard({
   awayLabel,
-  eventCount,
-  eventsCapped,
-  lines,
+  name,
+  summary,
   unread,
   pending,
+  urgentLeft,
   onPostcards,
   onRespond,
   onClose
 }: {
   awayLabel: string;
-  eventCount: number;
-  eventsCapped: boolean;
-  lines: FeedItem[];
+  name: string;
+  summary: WelcomeSummary;
   unread: number;
   pending: number;
+  /** "5 小时": how long the oldest open fork still has before the Agent decides without you */
+  urgentLeft: string | null;
   onPostcards: () => void;
   onRespond: () => void;
   onClose: () => void;
 }) {
+  // the one primary button: a question waiting for you beats a postcard, a postcard beats "just look"
+  const primary: "respond" | "postcards" | "town" = pending > 0 ? "respond" : unread > 0 ? "postcards" : "town";
+  const next =
+    primary === "respond"
+      ? urgentLeft
+        ? `有 ${pending} 件事等你回应，最急的一件还剩 ${urgentLeft}，之后它会自己决定。`
+        : `有 ${pending} 件事等你回应。`
+      : primary === "postcards"
+        ? `${name} 给你写了 ${unread} 张还没读的明信片。`
+        : `没有等你的事。${name} 在按自己的节奏过日子。`;
+  const respondBtn = (
+    <Btn variant={primary === "respond" ? "primary" : "default"} onClick={onRespond} autoFocus={primary === "respond"} sfx="confirm">
+      去回应它{pending > 1 ? `（${pending}）` : ""}
+    </Btn>
+  );
+  const cardBtn = (
+    <Btn variant={primary === "postcards" ? "primary" : "default"} onClick={onPostcards} autoFocus={primary === "postcards"} sfx="confirm">
+      读明信片{unread > 1 ? `（${unread}）` : ""}
+    </Btn>
+  );
   return (
     <ModalFrame title="欢迎回来" eyebrow={`你离开了 ${awayLabel}`} onClose={onClose} wide tone="gold">
       <p className={g.welcomeCount}>
-        这段时间，小镇里发生了 <b>{eventCount}{eventsCapped ? "+" : ""}</b> 件事。
+        这段时间小镇里发生了{" "}
+        <b>
+          {summary.events}
+          {summary.capped ? "+" : ""}
+        </b>{" "}
+        件事
+        {summary.mine > 0 ? (
+          <>
+            ，其中 <b>{summary.mine}</b> 件和 {name} 有关
+          </>
+        ) : null}
+        。
       </p>
-      <section className={g.welcomeLines} aria-label="它的这段时间">
-        <h3>它这段时间</h3>
-        {lines.length > 0 ? (
+      <section className={g.welcomeLines} aria-label="这段时间的要闻">
+        <h3>要闻</h3>
+        {summary.headlines.length > 0 ? (
           <ul>
-            {lines.map((l) => (
+            {summary.headlines.map((l) => (
               <li key={l.id}>
                 <time>{l.clock}</time>
                 <span>{l.text}</span>
@@ -200,21 +251,16 @@ export function WelcomeBackCard({
             ))}
           </ul>
         ) : (
-          <p className={g.welcomeQuiet}>没什么特别的事。它在按自己的节奏过日子。</p>
+          <p className={g.welcomeQuiet}>没什么特别的事。</p>
         )}
+        {summary.decidedAlone > 0 ? <p className={g.welcomeAlone}>没等到你的回应，它自己拿了 {summary.decidedAlone} 次主意。</p> : null}
       </section>
+      <p className={g.welcomeNext}>{next}</p>
       <div className={g.welcomeActions}>
-        {unread > 0 ? (
-          <Btn variant="primary" onClick={onPostcards} autoFocus sfx="confirm">
-            读明信片{unread > 1 ? `（${unread}）` : ""}
-          </Btn>
-        ) : null}
-        {pending > 0 ? (
-          <Btn variant={unread > 0 ? "default" : "primary"} onClick={onRespond} autoFocus={unread === 0} sfx="confirm">
-            去回应它{pending > 1 ? `（${pending}）` : ""}
-          </Btn>
-        ) : null}
-        <Btn variant={unread === 0 && pending === 0 ? "primary" : "default"} onClick={onClose} autoFocus={unread === 0 && pending === 0}>
+        {primary === "respond" ? respondBtn : null}
+        {unread > 0 ? cardBtn : null}
+        {primary !== "respond" && pending > 0 ? respondBtn : null}
+        <Btn variant={primary === "town" ? "primary" : "ghost"} onClick={onClose} autoFocus={primary === "town"}>
           看看小镇
         </Btn>
       </div>
@@ -222,113 +268,118 @@ export function WelcomeBackCard({
   );
 }
 
-// ───────────────────────────── key help ─────────────────────────────
+// ───────────────────────────── help ─────────────────────────────
 
-export function KeyHelp({ onClose }: { onClose: () => void }) {
+const HOW_TO_PLAY: ReactNode[] = [
+  <>你没有身体，也不能指挥它。它自己安排一天。</>,
+  <>
+    它拿不定主意时，会来问你一句——这是 <b>岔路</b>。你的回答会被记成 <b>烙印</b>。
+  </>,
+  <>
+    它有自己的立场：可能 <b>照做</b>、<b>调整</b>，或 <b>拒绝</b>。拒绝时你可以强制执行，要付 30 Scrip，它对你的信任也会 −10。
+  </>,
+  <>
+    有时它被人说动，回来 <b>质问</b> 自己的某条原则：你可以让它重申，或修订。
+  </>,
+  <>
+    每天最多 3 条 <b>留言</b>（50 字以内）。它不会秒回，会在夜里的 <b>明信片</b> 里回应你。
+  </>,
+  <>点居民或建筑，看他在做什么、为什么；点小镇动态里的一条，镜头会带你过去。</>
+];
+
+/** 帮助: how the game works, then the keys. One home for both (the button is top-right, or inside 更多 on a phone). */
+export function HelpModal({ phone, onClose, onBack }: { phone: boolean; onClose: () => void; onBack?: () => void }) {
   return (
-    <ModalFrame title="按键说明" eyebrow="键盘玩法（手机：拖动镜头，双指缩放）" onClose={onClose} wide>
-      <div className={g.keyGroups}>
-        {KEY_HELP.map((group) => (
-          <section key={group.title} className={g.keyGroup}>
-            <h3>{group.title}</h3>
-            <ul>
-              {group.rows.map((row) => (
-                <li key={row.label}>
-                  <span className={g.keyCaps}>
-                    {row.keys.map((alt, i) => (
-                      <span key={i} className={g.keyAlt}>
-                        {i > 0 ? <em>或</em> : null}
-                        {alt.map((k) => (
-                          <Keycap key={k}>{k}</Keycap>
-                        ))}
-                      </span>
-                    ))}
-                  </span>
-                  <span className={g.keyLabel}>{row.label}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
-      </div>
-      <p className={g.keyNote}>在输入框里打字时，这些按键不会生效。</p>
+    <ModalFrame title="帮助" eyebrow="你是守护灵" onClose={onClose} onBack={onBack} wide>
+      <section className={g.helpHow} aria-label="玩法">
+        <ul>
+          {HOW_TO_PLAY.map((t, i) => (
+            <li key={i}>{t}</li>
+          ))}
+        </ul>
+      </section>
+      <details className={g.keysBox} open={!phone}>
+        <summary>键盘按键{phone ? "（有键盘时）" : ""}</summary>
+        <div className={g.keyGroups}>
+          {KEY_HELP.map((group) => (
+            <section key={group.title} className={g.keyGroup}>
+              <h3>{group.title}</h3>
+              <ul>
+                {group.rows.map((row) => (
+                  <li key={row.label}>
+                    <span className={g.keyCaps}>
+                      {row.keys.map((alt, i) => (
+                        <span key={i} className={g.keyAlt}>
+                          {i > 0 ? <em>或</em> : null}
+                          {alt.map((k) => (
+                            <Keycap key={k}>{k}</Keycap>
+                          ))}
+                        </span>
+                      ))}
+                    </span>
+                    <span className={g.keyLabel}>{row.label}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <p className={g.keyNote}>在输入框里打字时，这些按键不会生效。手机上：拖动镜头，双指缩放。</p>
+      </details>
     </ModalFrame>
   );
 }
 
-// ───────────────────────────── sound ─────────────────────────────
+// ───────────────────────────── top-right system buttons, 更多 ─────────────────────────────
 
-export function HelpButton({ onClick }: { onClick: () => void }) {
+export function HelpButton({ onClick, open }: { onClick: () => void; open: boolean }) {
   return (
-    <button type="button" className={g.hudBtn} onClick={onClick} title="按键说明（?）">
+    <button type="button" className={`${g.hudBtn} ${open ? g.hudBtnOn : ""}`} onClick={onClick} title="帮助（?）" aria-haspopup="dialog">
       <span className={g.hudBtnText} aria-hidden>
         ?
       </span>
-      <span className={g.srOnly}>按键说明</span>
+      <span className={g.srOnly}>帮助</span>
     </button>
   );
 }
 
-export function SoundButton({ open, on, onToggle }: { open: boolean; on: boolean; onToggle: () => void }) {
+export function SettingsButton({ onClick, open }: { onClick: () => void; open: boolean }) {
   return (
-    <button type="button" className={`${g.hudBtn} ${open ? g.hudBtnOn : ""}`} onClick={onToggle} aria-haspopup="dialog" aria-expanded={open} title="声音设置" data-coach="sound">
-      <PixelGlyph rows={on ? GLYPH_SOUND_ON : GLYPH_SOUND_OFF} scale={2} />
-      <span className={g.srOnly}>声音设置</span>
+    <button type="button" className={`${g.hudBtn} ${open ? g.hudBtnOn : ""}`} onClick={onClick} title="设置：声音、动态效果" aria-haspopup="dialog" data-coach="settings">
+      <PixelGlyph rows={GLYPH_GEAR} scale={2} />
+      <span className={g.srOnly}>设置</span>
     </button>
   );
 }
 
-function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} className={`${g.switch} ${on ? g.switchOn : ""}`} onClick={() => onChange(!on)}>
-      <span>{on ? "开" : "关"}</span>
-    </button>
-  );
+export interface MoreItem {
+  key: string;
+  icon?: string;
+  glyph?: string[];
+  label: string;
+  hint: string;
+  onClick: () => void;
 }
 
-function VolumeRow({ title, on, vol, onOn, onVol }: { title: string; on: boolean; vol: number; onOn: (v: boolean) => void; onVol: (v: number) => void }) {
+/** 更多 (phones): the desktop rail and the top-right buttons, as one sheet. Opening one replaces the sheet. */
+export function MoreSheet({ items, onClose }: { items: MoreItem[]; onClose: () => void }) {
   return (
-    <div className={g.volRow}>
-      <span className={g.volTitle}>{title}</span>
-      <Switch on={on} onChange={onOn} label={`${title}开关`} />
-      <input
-        type="range"
-        className={g.range}
-        min={0}
-        max={10}
-        step={1}
-        value={Math.round(vol * 10)}
-        disabled={!on}
-        onChange={(e) => onVol(Number(e.target.value) / 10)}
-        aria-label={`${title}音量`}
-      />
-    </div>
-  );
-}
-
-/** the 🔊 popover: music on/off + volume, sound effects on/off + volume. Settings persist (localStorage). */
-export function SoundMenu({ settings, status, onUpdate, onClose }: { settings: AudioSettings; status: AudioStatus | null; onUpdate: (p: Partial<AudioSettings>) => void; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (!t || ref.current?.contains(t) || t.closest("[data-coach=sound]")) return;
-      onClose();
-    };
-    document.addEventListener("pointerdown", onDown, true);
-    return () => document.removeEventListener("pointerdown", onDown, true);
-  }, [onClose]);
-  const failed = status?.failed.length ?? 0;
-  return (
-    <div ref={ref} className={g.soundMenu} role="dialog" aria-label="声音设置">
-      <h3>声音</h3>
-      <VolumeRow title="音乐" on={settings.music} vol={settings.musicVol} onOn={(v) => onUpdate({ music: v })} onVol={(v) => onUpdate({ musicVol: v })} />
-      <VolumeRow title="音效" on={settings.sfx} vol={settings.sfxVol} onOn={(v) => onUpdate({ sfx: v })} onVol={(v) => onUpdate({ sfxVol: v })} />
-      {status?.locked && (settings.music || settings.sfx) ? <p className={g.soundNote}>浏览器要先收到一次点击，才允许出声。</p> : null}
-      {failed > 0 ? <p className={g.soundNote}>有 {failed} 个声音文件没能加载，游戏会安静地继续。</p> : null}
-      <button type="button" className={g.soundClose} onClick={onClose} aria-label="关闭">
-        <CloseGlyph scale={2} />
-      </button>
-    </div>
+    <ModalFrame title="更多" onClose={onClose}>
+      <ul className={g.moreGrid}>
+        {items.map((it) => (
+          <li key={it.key}>
+            <button type="button" className={g.moreItem} onClick={it.onClick}>
+              <span className={g.moreIcon} aria-hidden>
+                {it.icon ? <Icon name={it.icon} size={32} /> : it.glyph ? <PixelGlyph rows={it.glyph} scale={2} /> : null}
+              </span>
+              <span className={g.moreText}>
+                <b>{it.label}</b>
+                <small>{it.hint}</small>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </ModalFrame>
   );
 }

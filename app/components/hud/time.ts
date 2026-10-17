@@ -43,6 +43,24 @@ export function fmtClock(ms: number, tz: string): string {
   return `${String(p.h).padStart(2, "0")}:${String(p.mi).padStart(2, "0")}`;
 }
 
+/** "今晚 23:00" / "明早 06:00" / "昨天 14:30": a moment in the world's zone, said relative to `nowMs` */
+export function fmtWhen(ms: number, nowMs: number, tz: string): string {
+  try {
+    const a = zonedParts(nowMs, tz);
+    const b = zonedParts(ms, tz);
+    const diff = Math.round((Date.UTC(b.y, b.mo - 1, b.d) - Date.UTC(a.y, a.mo - 1, a.d)) / 86_400_000);
+    const clock = fmtClock(ms, tz);
+    const night = b.h >= 18;
+    const morning = b.h < 9;
+    if (diff === 0) return `${night ? "今晚" : morning ? "今早" : "今天"} ${clock}`;
+    if (diff === 1) return `${night ? "明晚" : morning ? "明早" : "明天"} ${clock}`;
+    if (diff === -1) return `昨天 ${clock}`;
+    return diff > 0 ? `${diff} 天后 ${clock}` : `${-diff} 天前 ${clock}`;
+  } catch {
+    return fmtClock(ms, tz);
+  }
+}
+
 /** "第 N 天": calendar days between the Agent's arrival and `simNow`, in the world's zone (1-based) */
 export function dayNumber(simNow: number, createdAtMs: number, tz: string, fallbackDayIndex: number): number {
   try {

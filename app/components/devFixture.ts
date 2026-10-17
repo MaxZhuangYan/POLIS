@@ -257,7 +257,7 @@ function mkPrinciples(): PrincipleView[] {
       domain: "trust",
       weight: 0.82,
       source: "llm",
-      origin: "第一次入城：Mira 想赊木料，你让它先看她的履约记录",
+      origin: "入城第一天，Mira 想赊木料给我 —— 你选了「先看她的履约记录」",
       createdAtMs: now - 3 * HOUR,
       citedCount: 3,
       lastCitedAtMs: now - HOUR,
@@ -269,7 +269,7 @@ function mkPrinciples(): PrincipleView[] {
       domain: "risk",
       weight: 0.7,
       source: "llm",
-      origin: "香料生意：你让它不碰翻倍的诱惑",
+      origin: "入城第一天，Sol 拉我做一笔翻倍的香料生意 —— 你选了「不碰」",
       createdAtMs: now - 2.5 * HOUR,
       citedCount: 1,
       lastCitedAtMs: now - 2 * HOUR,
@@ -281,7 +281,7 @@ function mkPrinciples(): PrincipleView[] {
       domain: "integrity",
       weight: 0.55,
       source: "fallback",
-      origin: "公告栏的低价收购单：你选了当面指出",
+      origin: "入城第一天，公告栏上有张压价的收购单 —— 你选了「当面指出」",
       createdAtMs: now - 2 * HOUR,
       citedCount: 0,
       lastCitedAtMs: null,
@@ -584,10 +584,12 @@ export class MockGame {
         { otherId: "nova", familiarity: 12, coopDone: 0, lastEvent: null, incidents: [] }
       ],
       memories: [
-        { id: 1, atMs: now - 20 * HOUR, clock: "09:00", text: "入城。守护灵第一次低语。", kind: "system" },
-        { id: 2, atMs: now - 6 * HOUR, clock: "13:00", text: "Mira 赊给我三块木料，说下周结账。", kind: "trust" },
-        { id: 3, atMs: now - 4 * HOUR, clock: "15:00", text: "Sol 的香料生意没做成，我没亏。", kind: "risk" },
-        { id: 4, atMs: now - 3 * HOUR, clock: "16:00", text: "你对我说：信人要看记录。", kind: "principle" }
+        { id: 1, atMs: now - 20 * HOUR, clock: "09:00", text: "入城。守护灵第一次低语。", kind: "system", tag: "你的话" },
+        { id: 2, atMs: now - 6 * HOUR, clock: "13:00", text: "Mira 赊给我三块木料，说下周结账。", kind: "trust", tag: "它做了" },
+        { id: 3, atMs: now - 4 * HOUR, clock: "15:00", text: "Sol 的香料生意没做成，我没亏。", kind: "risk", tag: "后来" },
+        { id: 4, atMs: now - 3 * HOUR, clock: "16:00", text: "你对我说：信人要看记录。我认同。", kind: "principle", tag: "它认同" },
+        { id: 5, atMs: now - 2 * HOUR, clock: "17:00", text: "你让我把整批木料赊给 Mira。我没答应，只赊了一半。", kind: "principle", tag: "它没认同" },
+        { id: 6, atMs: now - 1 * HOUR, clock: "18:00", text: "你强制我帮 Tao 跑了一趟。我照做了，但不太情愿。", kind: "principle", tag: "被迫" }
       ],
       notes: {
         leftToday: 2,

@@ -72,19 +72,26 @@ export default function Page() {
     };
   }, [refresh]);
 
+  // Several verbs can be in flight at once (a postcard being marked read while a note is sent), so `busy` is the most
+  // recent one still running: it only goes back to null when none is.
+  const running = useRef<Exclude<BusyKey, null>[]>([]);
   const run = useCallback(
     async (key: Exclude<BusyKey, null>, fn: () => Promise<unknown>) => {
+      running.current.push(key);
       setBusy(key);
       setError(null);
       try {
         await fn();
         await refresh();
       } catch (err) {
-        // Surface the error; never leave an unhandled rejection. UI state is
-        // snapshot-driven, so a failed action simply leaves things as they were.
+        // Surface the error, and tell the caller it failed (GameShell keeps what the player typed and does not show a
+        // "received"). UI state is snapshot-driven, so a failed action simply leaves things as they were.
         setError(err instanceof Error ? err.message : "操作失败，请重试");
+        throw err;
       } finally {
-        setBusy(null);
+        const i = running.current.lastIndexOf(key);
+        if (i >= 0) running.current.splice(i, 1);
+        setBusy(running.current[running.current.length - 1] ?? null);
       }
     },
     [refresh],

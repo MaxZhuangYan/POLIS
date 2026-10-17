@@ -315,8 +315,8 @@
   left: 50%;
   top: var(--top, 12px);
   transform: translateX(-50%);
-  width: min(440px, calc(100% - 860px));
-  min-width: 360px;
+  width: max-content;
+  max-width: min(480px, calc(100% - 860px));
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -506,37 +506,6 @@
   color: var(--cream-2);
   padding-left: 10px;
   border-left: 2px dashed var(--wood-4);
-}
-.actionBar {
-  padding: 0 2px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.actionHead {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.actionLabel {
-  font-size: 12px;
-  color: var(--cream-2);
-}
-.actionName {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--gold-hi);
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.actionPct {
-  color: var(--gold-hi);
-  font-variant-numeric: tabular-nums;
-}
-.actionLeft {
-  font-size: 12px;
-  color: var(--cream-2);
 }
 /* segmented pixel progress bar set into the wood */
 .progress {
@@ -1324,7 +1293,7 @@
 .toasts {
   position: absolute;
   left: 50%;
-  top: calc(var(--top, 12px) + 150px);
+  top: calc(var(--top, 12px) + 96px);
   transform: translateX(-50%);
   width: min(480px, calc(100% - 24px));
   display: flex;
@@ -1608,13 +1577,345 @@
   border-color: var(--gold-dk);
 }
 
+/* ───────────── additions: card, feed, inspector, dock states, memories ───────────── */
+
+/* the card's "doing" block: what it is doing now, how far along, and why */
+.doing {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.doing .activity {
+  grid-column: auto;
+}
+.doingBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.doingBar .progress {
+  flex: 1;
+  height: 14px;
+  padding: 2px;
+}
+.doingPct {
+  flex: none;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.reasonLead {
+  font-weight: 400;
+  color: var(--gold-ink);
+}
+.offsetLong {
+  color: #6b5a22;
+}
+
+/* feed */
+.feedHeadRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.feedHeadRow .feedHead {
+  flex: 1;
+  min-width: 0;
+}
+.feedFresh {
+  padding: 0 4px;
+  border: 2px solid var(--edge);
+  background: var(--gold);
+  color: var(--edge);
+  font-size: 12px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.feedMode {
+  flex: none;
+  min-height: 40px;
+  padding: 0 4px;
+  border: 8px solid transparent;
+  border-image: var(--btn-tile) 4 fill / 8px stretch;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.feedMode:hover {
+  border-image-source: var(--btn-tile-hover);
+}
+.feedMode[aria-pressed="true"] {
+  border-image-source: var(--btn-tile-on);
+}
+.feedText {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.feedActive {
+  background: var(--paper-2);
+  outline: 2px solid var(--gold-dk);
+  outline-offset: -2px;
+}
+.feedGroup {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px 2px 10px;
+  margin-bottom: 2px;
+  border: none;
+  border-left: 4px dotted var(--paper-3);
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+.feedGroup:hover {
+  background: var(--paper-2);
+  color: var(--ink-2);
+}
+.feedGroupDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: var(--ink-3);
+}
+.feedGroupOpen {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  opacity: 0.85;
+}
+@media (pointer: coarse), (max-width: 900px) {
+  .feedGroup {
+    min-height: 40px;
+  }
+}
+
+/* inspector */
+.insEvent {
+  padding: 4px 8px;
+  border: 2px solid var(--gold-dk);
+  background: #fbe6a6;
+}
+.insEvent h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--gold-ink);
+}
+.insEvent h4 time {
+  color: var(--gold-ink);
+}
+.insEvent p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.insNow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.insNow h4,
+.insRel h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--ink-3);
+}
+.insNow .activity {
+  grid-column: auto;
+}
+.insWhere {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  padding: 0 10px 0 6px;
+  border: 2px solid var(--paper-3);
+  background: var(--paper-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.insWhere:hover {
+  border-color: var(--gold-dk);
+}
+.insFeed li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.textLink {
+  display: inline;
+  margin: 0;
+  padding: 0 1px;
+  border: none;
+  background: none;
+  color: var(--integrity);
+  font: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.textLink:hover {
+  background: var(--gold-hi);
+}
+.textLinkPlace {
+  color: var(--gold-ink);
+}
+@media (pointer: coarse) {
+  /* inline links are small: grow the part of them that answers a finger */
+  .textLink {
+    padding: 8px 2px;
+    margin: -8px -2px;
+  }
+}
+button.tieName {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--integrity);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  min-height: 24px;
+}
+@media (pointer: coarse), (max-width: 900px) {
+  .townTies li {
+    min-height: 40px;
+  }
+}
+.drawer:focus,
+.inspector:focus {
+  outline: none;
+}
+
+/* dock states */
+.dockIdle .icon {
+  opacity: 0.55;
+}
+.dockIdle .dockLabel {
+  color: var(--ink-3);
+}
+.dockOn {
+  border-image-source: var(--btn-tile-on);
+}
+
+/* memories: whose idea it was */
+.memItem {
+  align-items: flex-start;
+}
+.memTag {
+  flex: none;
+  padding: 0 4px;
+  border: 2px solid var(--paper-3);
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.memTagYours {
+  border-color: var(--edge);
+  background: var(--gold);
+  color: var(--edge);
+}
+.memTagAgreed {
+  border-color: var(--trust);
+  background: #dcefe2;
+  color: var(--trust);
+}
+.memTagRefused {
+  border-color: var(--gold-dk);
+  background: #fbe6a6;
+  color: var(--gold-ink);
+}
+.memTagForced {
+  border-color: #8f2f22;
+  background: #f9d9cc;
+  color: #8f2f22;
+}
+.memTagMuted {
+  border-color: var(--paper-3);
+  background: transparent;
+  color: var(--ink-3);
+}
+.memText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.memFilter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.memFilterBtn {
+  min-height: 40px;
+  padding: 0 8px;
+  border: 2px solid var(--ink-3);
+  background: var(--paper-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.memFilterOn {
+  border-color: var(--gold-dk);
+  background: var(--gold);
+}
+
+.feedMode:focus-visible,
+.feedGroup:focus-visible,
+.textLink:focus-visible,
+.insWhere:focus-visible,
+.memFilterBtn:focus-visible,
+button.tieName:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
+}
+
+/* the dim layer behind a phone's bottom sheet (tap it = close) */
+.scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  background: rgba(20, 10, 4, 0.28);
+  pointer-events: auto;
+}
+
 /* ───────────── phone ───────────── */
 
 .rightCol {
   position: absolute;
   right: 4px;
   top: var(--top, 8px);
-  width: 124px;
+  width: 108px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -1630,12 +1931,14 @@
 }
 
 @media (max-width: 900px) {
+  /* top-left: the Agent card (identity, numbers, what it is doing and why). top-right: the clock. Bottom: the dock.
+     Everything else is a sheet that opens on demand, so the town stays visible. */
   .leftCol {
     left: 4px;
     top: var(--top, 8px);
-    width: calc(100% - 136px);
+    width: calc(100% - 120px);
     max-width: 440px;
-    max-height: calc(100% - var(--top, 8px) - 150px);
+    max-height: calc(100% - var(--top, 8px) - 100px);
     gap: 4px;
   }
   .agentCard {
@@ -1643,30 +1946,51 @@
     column-gap: 6px;
     row-gap: 2px;
   }
+  .portraitBtn {
+    grid-row: 1 / span 2;
+    grid-column: 1;
+  }
+  .agentMeta {
+    grid-column: 2;
+    grid-row: 1;
+  }
   .agentName {
     font-size: 12px;
     line-height: 20px;
     padding: 0 4px;
   }
-  .youTag {
+  .youTag,
+  .titleWrap {
     display: none;
   }
   .chips {
+    grid-column: 2;
+    grid-row: 2;
     margin-top: 0;
     gap: 2px;
+    flex-wrap: nowrap;
   }
   .chip {
     gap: 2px;
     padding: 0 2px 0 0;
+    min-width: 0;
   }
-  .chipLabel {
+  .chipLabel,
+  .chipVal small {
     display: none;
   }
-  .agentCard .reason {
-    display: none;
+  .doing {
+    grid-row: 3;
   }
-  .actionBar {
-    gap: 2px;
+  .doing .activity span:last-child,
+  .doing .reason span:last-child {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .doing .reason {
+    padding: 2px 6px;
   }
   .feed {
     width: 100%;
@@ -1702,26 +2026,19 @@
     align-items: flex-end;
     gap: 2px;
   }
+  .pillTest,
   .pillLong {
     display: none;
   }
   .pillShort {
     display: inline;
   }
-  .rail {
-    position: static;
-    gap: 2px;
-  }
-  .railBtn {
-    width: 56px;
-    min-height: 56px;
-  }
-  .railBtn .icon {
-    width: 16px;
-    height: 16px;
-  }
-  .railLabel {
+  .offsetNote {
     font-size: 12px;
+    line-height: 16px;
+  }
+  .offsetLong {
+    display: none;
   }
   .dock {
     left: 4px;
@@ -1733,6 +2050,7 @@
   .dockBtn {
     flex: 1 1 0;
     width: auto;
+    min-width: 0;
     min-height: 62px;
   }
   .dockKey {
@@ -1740,14 +2058,18 @@
   }
   .locate {
     right: 8px;
-    bottom: 88px;
+    bottom: 92px;
     width: 56px;
     height: 56px;
   }
   .testPanel {
     left: 4px;
-    bottom: 88px;
-    width: 250px;
+    bottom: 92px;
+    width: auto;
+    max-width: calc(100% - 76px);
+  }
+  .testBtns {
+    min-width: 224px;
   }
   .toasts {
     top: calc(var(--top, 8px) + 150px);
@@ -1766,13 +2088,13 @@
     left: 4px;
     right: 4px;
     top: auto;
-    bottom: 76px;
+    bottom: 90px;
     width: auto;
     max-height: 52dvh;
     z-index: 16;
   }
   .feedback {
-    bottom: 76px;
+    bottom: 90px;
     width: calc(100% - 8px);
   }
   .feedbackBtns {
@@ -1781,12 +2103,6 @@
   }
   .feedbackBtns .btn {
     padding: 0;
-  }
-}
-/* short phone / tablet screens: the rail would run into the locate button, so it steps left of the rail */
-@media (max-width: 900px) and (max-height: 700px) {
-  .locate {
-    right: 72px;
   }
 }
 @keyframes sheetIn {
@@ -1810,4 +2126,37 @@
   .spinner i {
     animation: none;
   }
+}
+
+/* ───────────── pending line, imprint reveal ───────────── */
+
+/* "已收到，它在想…": shown while a request runs */
+.pending {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 2px dashed var(--gold-dk);
+  background: #fbf0c4;
+  color: var(--gold-ink);
+  font-size: 12px;
+  line-height: 18px;
+}
+.pending span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* "你选了「接受合作」，它记成了：" above the principle's text */
+.tabletChoice {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
+.tabletChoice b {
+  font-weight: 400;
+  padding: 0 4px;
+  background: var(--gold);
+  color: var(--edge);
 }

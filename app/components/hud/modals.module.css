@@ -779,3 +779,98 @@
   text-decoration: underline dotted;
   cursor: pointer;
 }
+
+/* ───────────── dialog model additions ───────────── */
+
+/* the first-run path: 起名 · 三件事 · 它记住了什么 */
+.steps {
+  list-style: none;
+  margin: 0 0 2px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-3);
+}
+.steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.steps i {
+  min-width: 18px;
+  height: 18px;
+  display: inline-block;
+  border: 2px solid var(--ink-3);
+  font-style: normal;
+  line-height: 14px;
+  text-align: center;
+}
+.stepDone {
+  color: var(--ink-2);
+}
+.stepDone i {
+  background: var(--paper-3);
+  border-color: var(--ink-2);
+}
+.stepOn {
+  color: var(--ink);
+}
+.stepOn i {
+  background: var(--gold);
+  border-color: var(--edge);
+  color: var(--edge);
+}
+
+/* who is speaking, right above the Agent's words */
+.promptBy {
+  margin: 0 0 -6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
+.promptTight {
+  line-height: 32px;
+}
+
+/* note ideas, one tap to fill the box */
+.ideas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.idea {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 2px dashed var(--ink-3);
+  background: rgba(255, 255, 255, 0.35);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+.idea:hover:not(:disabled) {
+  border-style: solid;
+  border-color: var(--gold-dk);
+  background: var(--gold-hi);
+}
+.idea:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
+}
+/* "已送出": the confirmation that stays until the next keystroke */
+.okLine {
+  margin: 0;
+  padding: 4px 10px;
+  border: 2px solid var(--trust);
+  background: #dcefe2;
+  color: var(--edge);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}

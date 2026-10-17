@@ -724,3 +724,115 @@
   border-image-source: var(--btn-tile-on);
   outline: none;
 }
+
+/* ───────────── welcome back: next step ───────────── */
+.welcomeNext {
+  margin: 0;
+  padding: 4px 10px;
+  border-left: 8px solid var(--gold-dk);
+  background: var(--gold-hi);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink);
+}
+.welcomeAlone {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--gold-ink);
+}
+
+/* ───────────── help ───────────── */
+.helpHow ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink);
+}
+.helpHow b {
+  color: var(--gold-ink);
+  font-weight: 400;
+  text-shadow: 1px 0 0 currentColor;
+}
+.keysBox {
+  border-top: 2px dashed var(--paper-3);
+  padding-top: 6px;
+}
+.keysBox > summary {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.keysBox > summary:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
+}
+
+/* ───────────── 更多 (phone sheet) ───────────── */
+.moreGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.moreItem {
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  border: 8px solid transparent;
+  border-image: var(--btn-tile) 4 fill / 8px stretch;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.moreItem:hover {
+  border-image-source: var(--btn-tile-hover);
+}
+.moreItem:active {
+  border-image-source: var(--btn-tile-down);
+  transform: translateY(2px);
+}
+.moreItem:focus-visible {
+  outline: 3px solid var(--edge);
+  outline-offset: 2px;
+  box-shadow: var(--focus);
+}
+.moreIcon {
+  flex: none;
+  width: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.moreText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.moreText b {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  text-shadow: 1px 0 0 currentColor;
+}
+.moreText small {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
