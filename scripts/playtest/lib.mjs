@@ -218,7 +218,11 @@ export async function runPlaytest(name, opts, body) {
     log(`server ready at ${server.base} (${server.mode}, pid ${server.pid}, db ${dbPath})`);
     // compile the page once up front so the browser never waits for it
     await fetch(server.base + "/", { signal: AbortSignal.timeout(sec(180)) }).catch(() => undefined);
-    browser = await chromium.launch({ headless: process.env.PLAYTEST_HEADED !== "1" });
+    // PLAYTEST_CHROMIUM: use an existing Chromium binary when Playwright's own download doesn't match
+    browser = await chromium.launch({
+      headless: process.env.PLAYTEST_HEADED !== "1",
+      ...(process.env.PLAYTEST_CHROMIUM ? { executablePath: process.env.PLAYTEST_CHROMIUM } : {}),
+    });
     await body(t);
   } catch (err) {
     crash = err;
